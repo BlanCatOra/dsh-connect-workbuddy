@@ -78,6 +78,7 @@ WMI 服务（`Win32_Process.Create`）创建的进程与 Electron 宿主同为�
 | issue #15 | Windows 上加密凭据读不出 | 探测路径缺 `%LOCALAPPDATA%\WorkBuddy`（用户级安装） |
 | 2.1.0（本次） | 宿主内每次进程存活判定都闪一次黑色控制台窗口 | 心跳探测未设 `windowsHide`，而宿主是无控制台的 GUI 进程（§1-5、§2 A 档取证） |
 | 未发布（PR #44） | 「重新检测账号」没能把删掉的账号找回来，而界面什么都不说 | 隐藏名单删除被拒时异常被吞掉（`rm` 的 `force` 不忽略 `EPERM`）——详见下节（B 档） |
+| 未发布（PR #44 追加） | `tests/windows-file-lock.spec.ts` 在真机上恒红，而 CI 恒绿 | **测试自身的清场竞态**（不是产品缺陷）：`kill()` 只投递信号，内核关闭句柄在其后数毫秒，此窗口内 `rm` 必得 `EBUSY`——详见下节 |
 
 ### 「重新检测账号」的静默失败（PR #44，**B 档 CI 实测**）
 
@@ -97,6 +98,22 @@ WMI 服务（`Win32_Process.Create`）创建的进程与 Electron 宿主同为�
 
 未升 A 档的原因：这是 `windows-latest` 虚拟机上的 CI 取证，不是用户真机（未覆盖「某个具体杀毒软件实际持有句柄」的行为）。按 §2 的定义，CI 实测即 B 档；若你在真机上复现出与 CI 不同的形态，欢迎回报以便继续升档。
 
+### 收尾阶段的同一种占用：`kill()` 不等于句柄已释放（PR #44 追加）
+
+**现象**：`tests/windows-file-lock.spec.ts` 在一台 Windows 真机上**每次都红**，而同一提交在 CI 的 `windows-latest` 上**每次全绿**。报错是 `EBUSY: resource busy or locked, unlink '…\.dismissed.json'`。
+
+**为什么它不是产品缺陷（先排除，再动手）**：报错发生在 `afterEach` 的清场里，**测试体内的断言一条都没失败**——`clearDismissals()` 仍如实返回 `false`、账号仍保持隐藏。文件被删不掉，是**测试自己还握着那个句柄**。把这个形态误当成产品 bug 去改 `clearDismissals`，会把一个正确的实现改坏。
+
+**根因**：`kill()` 是**投递**信号，不是等待进程结束。该进程持有的 `FileShare.Read` 句柄由内核在其后数毫秒才关闭，而紧跟的 `rm` 已经走到 `unlink` 了。本机实测：`rm` 在 `kill()` 返回后 **1ms** 就到达 `unlink`，句柄直到 **~9ms** 才释放——窗口内 8/8 全红；而**盲等 50ms 后同样的裸 `rm` 8/8 全绿**，这条对照证明缺的只是时间，与删什么东西无关。
+
+**为什么 CI 绿而真机红**：这是**竞态**，胜负取决于 `rm` 走到 `unlink` 用了多久。慢 runner（冷启动、遍历临时目录更久）常常在窗口之外才到达 `unlink`，于是恒绿；快机器反而恒红。**「CI 绿」因此不能否证本机红**，反之亦然——两个方向的推断都不成立。
+
+**修法**：`afterEach` 改为 `await` **进程真正 `exit`** 之后再 `rm`（等的是这个清场所需的条件，不是一个够长的常数），并保留 `rm` 自身的重试预算作为第二层。同一文件第二个用例里原先的 `setTimeout(1500)` 一并换成同一个等待——**那个盲等正是同一竞态被掩盖的地方**（一个用例靠 1.5s 蒙对，另一个没蒙，于是只有后者暴露）。换掉之后该用例耗时从 7782ms 降到 1615ms：等待条件比猜时间既更准也更快。
+
+**变异验证（本机真跑）**：把 `afterEach` 还原成「裸 `kill()` + 立即 `rm`」→ 立刻复现 `EBUSY`，与原始故障逐字一致；恢复修复后 6/6 连续通过。**这条守卫只保护测试自身**：它不会因为产品代码回退而变红（产品侧由 `tests/dismissal-clear-failure.spec.ts` 的注入式用例与上文那条变异验证负责）。
+
+**推论（写给后人）**：凡是「起子进程占住文件 → 杀了它 → 立刻清场」的测试，都要 `await` 退出事件，而不是假定 `kill()` 已经把文件还回来了。本仓库目前只有本文件起子进程占文件；新增同类测试时照此办理。
+
 **共同形态**：Windows 的故障几乎都是**静默**的（不报错、只是没生效），且**只在 Windows 上出现**。因此 Windows 相关的修复必须配「可被变异咬住」的测试，否则回归无人拦。
 
 **关于 issue #13 重试预算的更正**：本文件此前写作「重试预算（200+600ms）」。实测并核对上游实现（`@deepseek-ai/dsh-atomic-write`，rc.1 与 rc.2 常量相同：initial 20ms、max 200ms、limit 8）后，真实预算是**延迟序列 20+40+80+160+200×4 ≈ 1100ms**（实测端到端 1149–1165ms，含 `rename` 调用开销）；**不存在 600ms 这一项**。真机实测的持有期-结果对照：持有 0/100/300/600/1000ms 后释放 → 全部成功；持有 60s（超出预算）→ `EPERM`，且目标文件**保持原内容不变**（不产生半写文件）。
@@ -108,6 +125,7 @@ WMI 服务（`Win32_Process.Create`）创建的进程与 Electron 宿主同为�
 - [ ] 若涉及文件写入：Windows 上可能被占用，是否需要回读校验？
 - [ ] 若走外部命令：Windows 上有无等价物？（`ps -o lstart=` → PowerShell；`which` → `where`）
 - [ ] **若 spawn 子进程：是否设了 `windowsHide: true`？** 宿主无控制台，漏设即闪黑框（§1-5）。注意**在终端里验证不出来**——那种形态下子进程只是继承控制台
+- [ ] **若测试起子进程占住文件：清场前是否 `await` 了它的 `exit`？** `kill()` 只投递信号，句柄在其后数毫秒才关闭；此窗口内 `rm` 必得 `EBUSY`（§3 末）。窗口是竞态，**CI 绿不代表真机绿**
 - [ ] 新增测试是否**在任意主机上都能跑**（注入 `platform`/`home`/`env`），而不是断言「跑测试的机器是什么平台」？
 - [ ] 结论措辞是否与§2 的证据档位相称？（C 档不要写成「已验证」）
 - [ ] 本文件与两份 README 是否同步？
@@ -121,6 +139,7 @@ WMI 服务（`Win32_Process.Create`）创建的进程与 Electron 宿主同为�
 | 可执行文件候选与测试 | `src/at-rest.ts` `workbuddyAppExecutableCandidates()`；`tests/at-rest.spec.ts` |
 | 心跳时间戳与测试 | `src/host-heartbeat.ts` `processStartTimeMs()` / `processStartProbe()`；`tests/host-heartbeat.spec.ts` |
 | 子进程启动选项（`windowsHide`）与测试 | `src/host-heartbeat.ts` `PROCESS_PROBE_OPTIONS`、`src/at-rest.ts` `fetchAtRestKeyPayload()`；`tests/platform-standing.spec.ts`、`tests/host-heartbeat.spec.ts` |
+| 真机文件占用取证与测试自身清场 | `tests/windows-file-lock.spec.ts`（`kill()` 后必须 `await` `exit` 再 `rm`，见 §3 末） |
 | 写入回读校验与测试 | `src/client/account-selection.ts`；`tests/client-account-selection.spec.ts` |
 | 设置隔离（供测试） | `vitest.config.ts`（`LOCALAPPDATA` / `APPDATA` / `HOME` / `USERPROFILE` / `XDG_CONFIG_HOME`） |
 | 诊断脚本的跨平台写法 | `scripts/verify-dsml.mjs`：用 Node 读源码代替 `grep`（Windows 上没有 `grep`，而 `tryExec` 会吞掉失败，于是「工具缺失」会伪装成「没找到」）；仓库根用 `fileURLToPath` 而不是 `new URL(...).pathname`（后者在 Windows 上给出 `/C:/...`，任何 fs 调用都不接受） |

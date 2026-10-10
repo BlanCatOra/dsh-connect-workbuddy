@@ -127,6 +127,33 @@ describe('Windows code paths stay present', () => {
     }
   })
 
+  it('waits for a file-holding child to exit before removing its temp tree', () => {
+    // `kill()` only DELIVERS a signal; Windows closes the holder's file handle a
+    // few ms later, and an `rm` landing inside that window dies with `EBUSY`.
+    // `tests/windows-file-lock.spec.ts` pins the behaviour, but that file CANNOT
+    // catch a regression on a slow runner: the outcome is a RACE (measured 1ms
+    // to reach `unlink` vs ~9ms to release the handle), so a machine slow enough
+    // to walk the tree first simply passes. That is exactly how the broken
+    // teardown shipped green through `windows-latest` while failing on a real
+    // machine every single time — so the invariant is pinned here, where it is
+    // deterministic on every platform. See `docs/WINDOWS.md` §3 (last section).
+    const spec = read('tests/windows-file-lock.spec.ts')
+
+    // The wait must be on the CONDITION (the process exited), not a duration: a
+    // `setTimeout` encodes only "long enough on my machine". Matched on the
+    // event, since `once('exit')` is the actual mechanism.
+    expect(spec, 'the holder is signalled but its exit is never awaited').toMatch(/once\('exit'/)
+
+    // And the teardown must await that helper BEFORE deleting anything.
+    const beforeHelper = spec.slice(0, spec.indexOf('async function waitForExit'))
+    const teardown = beforeHelper.slice(beforeHelper.lastIndexOf('afterEach('))
+    const awaited = teardown.indexOf('await killLockHolder()')
+    const deleted = teardown.indexOf('await rm(')
+    expect(awaited, 'the teardown no longer waits for the holder to exit').toBeGreaterThanOrEqual(0)
+    expect(deleted, 'the teardown no longer removes the temp tree').toBeGreaterThanOrEqual(0)
+    expect(awaited, 'the temp tree is removed before the holder is awaited').toBeLessThan(deleted)
+  })
+
   it('never hard-codes a POSIX separator in a path this project builds', () => {
     // The 2.0.11 CI break, distilled: production code was fine because it used
     // `join`, while a TEST asserted a POSIX literal and therefore asserted

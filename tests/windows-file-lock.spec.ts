@@ -27,6 +27,22 @@
  * there is nothing to assert — the absence of the failure IS the semantics.
  * `tests/platform-standing.spec.ts` keeps a Windows runner in the CI matrix, so
  * this runs on every push.
+ *
+ * The TEARDOWN has a Windows lesson of its own, and it is why this file was
+ * fixed while CI was still green. `kill()` only DELIVERS a signal; the kernel
+ * closes the held handle a few milliseconds LATER. Removing the temp tree
+ * immediately after `kill()` therefore lands inside that window and fails with
+ * `EBUSY`. Measured on the machine this was fixed on: `rm` reached its `unlink`
+ * 1ms after `kill()` returned, while the handle stayed open until ~9ms — so the
+ * failure was deterministic there and `0/8` rounds survived it, yet a slow
+ * runner can spend longer than that merely walking the tree, which is why
+ * `windows-latest` never saw it. State that plainly, because the shape is
+ * misleading: every ASSERTION in this file passed, and the red test was the
+ * cleanup. It was never evidence of a store bug.
+ *
+ * The fix waits for 'exit' — the condition the cleanup actually needs — and
+ * keeps `rm`'s own contention budget as a second layer. A blind `sleep` would
+ * pass too (measured), but it would encode only "long enough on my machine".
  */
 import { execFile } from 'node:child_process'
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
@@ -58,10 +74,58 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  lockProcess?.kill()
-  lockProcess = undefined
-  await rm(root, { recursive: true, force: true })
+  // `kill()` returns as soon as the signal is DELIVERED; the holder's file
+  // handle is closed by the kernel a few ms later. Removing the tree in that
+  // window is the `EBUSY` this teardown used to die on (see the file header).
+  await killLockHolder()
+  // Second layer: even once the process is gone, a Windows runner can still
+  // refuse briefly (a scanner that opened the file in the meantime). `rm`'s own
+  // retry budget absorbs that instead of failing the cleanup.
+  await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 })
 })
+
+/**
+ * Kill the holder process and wait for it to actually EXIT.
+ *
+ * Waiting for the condition rather than assuming the signal is the whole story
+ * is the entire point: `kill()` resolving says nothing about whether Windows
+ * has closed the handle yet.
+ *
+ * The 10s guard is a backstop, not a timeout to tune. If it ever fires, the
+ * cleanup must still proceed — a hung helper would otherwise turn one leaked
+ * temp directory into a red suite, which is the same "cleanup failure masks
+ * the real result" trap this fix removes. The already-dead case is settled by
+ * the `exitCode`/`signalCode` check BEFORE any listener is attached: a process
+ * that died earlier emits no further 'exit', so waiting on the event alone
+ * would hang for the full guard every time.
+ */
+async function waitForExit(child: ReturnType<typeof execFile>): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return
+  await new Promise<void>(resolve => {
+    let settled = false
+    const done = (): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(guard)
+      resolve()
+    }
+    const guard = setTimeout(() => {
+      // Escalate once so a wedged PowerShell still dies, then stop waiting:
+      // the `rm` below carries its own retry budget.
+      child.kill('SIGKILL')
+      done()
+    }, 10_000)
+    child.once('exit', done)
+  })
+}
+
+async function killLockHolder(): Promise<void> {
+  const child = lockProcess
+  lockProcess = undefined
+  if (child === undefined) return
+  child.kill()
+  await waitForExit(child)
+}
 
 /**
  * Hold `path` open with `FileShare.Read` until the returned handle is killed.
@@ -158,9 +222,14 @@ describe.skipIf(!isWindows)('a real Windows sharing violation on the dismissal l
     // Release, then retry: the SAME call must now succeed and the account must
     // come back, so the failure above is a transient condition rather than a
     // stuck state the user cannot leave.
-    lockProcess?.kill()
-    lockProcess = undefined
-    await new Promise(resolve => setTimeout(resolve, 1_500))
+    //
+    // Waits for the real exit instead of a fixed 1.5s sleep. The sleep happened
+    // to cover the handle-release window, which is why THIS test stayed green
+    // while the file still failed in `afterEach` — the same race, papered over
+    // in one place and not the other. Waiting on the condition removes the
+    // guesswork and documents the dependency: the account returns only once the
+    // OS has actually let the file go.
+    await killLockHolder()
 
     expect(await makeStore().clearDismissals()).toBe(true)
     expect((await makeStore().accounts()).map(a => a.accountName)).toEqual(['LockedAccount'])
