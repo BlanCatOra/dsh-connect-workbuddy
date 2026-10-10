@@ -64,6 +64,32 @@ describe('save keeps the draft unless the write AND the re-read both verify (A-8
     await m.unmount()
   })
 
+  it('shows the busy veil for the whole save, and drops it only when the re-read lands', async () => {
+    // Saving is a write the user is waiting on, and the panel's values change
+    // only after the Host answers. The veil must span BOTH halves — the write
+    // and the re-read — which is exactly the window `saving` already covers.
+    // A veil that came down at the write would leave the panel showing the
+    // pre-save values it is about to replace. (The pool props are NOT re-rendered
+    // here, so this pins the ordering the component itself controls.)
+    let release: (() => void) | undefined
+    const onSaved = vi.fn(() => new Promise<boolean>(resolve => {
+      release = () => resolve(true)
+    }))
+    const m = await mount(AccountPool, baseProps({ settingsScope: fakeScope({}), onSaved }))
+    await makeDirty(m)
+    await m.click(m.button('row.poolSaved'))
+    await m.settle()
+    // The write is done, the re-read is NOT: the veil is still up.
+    expect(onSaved).toHaveBeenCalledTimes(1)
+    expect(m.container.querySelector('.dsm-workbuddy-veil')).not.toBeNull()
+    expect(m.text()).toContain('row.poolSaving')
+    release?.()
+    await m.settle()
+    // Now everything has landed, so nothing is being waited on.
+    expect(m.container.querySelector('.dsm-workbuddy-veil')).toBeNull()
+    await m.unmount()
+  })
+
   it('keeps the draft and explains when onSaved resolves false (M14, M15: the N1 bail-out must return)', async () => {
     const onSaved = vi.fn(async () => false)
     const scope = fakeScope({})

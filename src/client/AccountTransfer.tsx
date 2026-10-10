@@ -84,6 +84,17 @@ export function AccountTransfer({ t, region, accounts, onChanged }: AccountTrans
   const [preview, setPreview] = useState<WorkBuddyTransferPreview | undefined>(undefined)
   const [importSelected, setImportSelected] = useState<ReadonlySet<number>>(new Set())
   const fileInput = useRef<HTMLInputElement | null>(null)
+  /**
+   * The text of the file the user just picked.
+   *
+   * Held here rather than re-read from the input at import time: the picker
+   * is a bare system dialog that closes immediately (see the import button),
+   * so between preview and confirm there is no dialog on screen holding the
+   * File. Re-reading `fileInput.current.files` would also break the moment
+   * anything clears the input — and it must be cleared after every pick, or
+   * choosing the SAME file twice fires no change event.
+   */
+  const importText = useRef('')
   const mounted = useRef(true)
   useEffect(() => {
     mounted.current = true
@@ -127,6 +138,7 @@ export function AccountTransfer({ t, region, accounts, onChanged }: AccountTrans
     setPhase({ kind: 'importing' })
     try {
       const text = await file.text()
+      importText.current = text
       const response = await fetch(withWorkBuddyRouteAction(WORKBUDDY_TRANSFER_PATH, region, 'preview'), {
         method: 'POST',
         headers: { 'content-type': 'application/json', accept: 'application/json' },
@@ -150,10 +162,10 @@ export function AccountTransfer({ t, region, accounts, onChanged }: AccountTrans
   }
 
   const runImport = async (): Promise<void> => {
-    if (preview === undefined || importSelected.size === 0 || fileInput.current?.files?.[0] === undefined) return
+    if (preview === undefined || importSelected.size === 0 || importText.current === '') return
     setPhase({ kind: 'importing' })
     try {
-      const text = await fileInput.current.files[0].text()
+      const text = importText.current
       const response = await fetch(withWorkBuddyRouteAction(WORKBUDDY_TRANSFER_PATH, region, 'import'), {
         method: 'POST',
         headers: { 'content-type': 'application/json', accept: 'application/json' },
@@ -210,15 +222,43 @@ export function AccountTransfer({ t, region, accounts, onChanged }: AccountTrans
         >
           {t('row.transferExport')}
         </button>
+        {/*
+          The import button opens the SYSTEM file picker directly. It used to
+          open a one-line dialog first ("choose a JSON file exported by this
+          plugin or a sibling tool") whose only content was that sentence and
+          a file input — one click of ceremony in front of a dialog the OS is
+          about to show anyway. The preview dialog still appears, with the
+          parsed entries to confirm, which is the step that actually needs
+          the user's attention.
+        */}
         <button
           type="button"
           className="dsm-btn dsm-btn-outline"
           disabled={busy}
-          onClick={() => { setPreview(undefined); setImportSelected(new Set()); setDialog('import') }}
+          onClick={() => { fileInput.current?.click() }}
         >
           {t('row.transferImport')}
         </button>
       </div>
+      {/* The picker's input is mounted with the section, not inside the preview
+          dialog: the button must be able to open it before any dialog exists,
+          and `value=""` after every pick lets the same file be chosen twice. */}
+      <input
+        ref={fileInput}
+        type="file"
+        accept="application/json,.json"
+        className="dsm-workbuddy-transfer-file"
+        onChange={event => {
+          const file = event.target.files?.[0]
+          event.target.value = ''
+          if (file !== undefined) {
+            setPreview(undefined)
+            setImportSelected(new Set())
+            setDialog('import')
+            void readImportFile(file)
+          }
+        }}
+      />
       {dialog === 'export'
         ? <div className="dsm-workbuddy-transfer-dialog" role="dialog" aria-label={t('row.transferExport')}>
             <p>{t('row.transferExportPick', { total: accounts.length })}</p>
@@ -260,19 +300,13 @@ export function AccountTransfer({ t, region, accounts, onChanged }: AccountTrans
         : null}
       {dialog === 'import'
         ? <div className="dsm-workbuddy-transfer-dialog" role="dialog" aria-label={t('row.transferImport')}>
-            <p>{t('row.transferImportPick')}</p>
-            <input
-              ref={fileInput}
-              type="file"
-              accept="application/json,.json"
-              disabled={busy}
-              onChange={event => {
-                const file = event.target.files?.[0]
-                if (file !== undefined) void readImportFile(file)
-              }}
-            />
+            {/* Only the CONFIRMATION lives here: the file was already chosen
+                (the system picker opened straight from the button), so this
+                dialog shows what was found and which entries will be written.
+                While the preview is in flight it says so instead of showing an
+                empty box. */}
             {preview === undefined
-              ? null
+              ? <p>{t('row.transferPreviewing')}</p>
               : <>
                   <p>{t('row.transferPreviewTotal', { total: preview.total })}</p>
                   <ul className="dsm-workbuddy-transfer-list">

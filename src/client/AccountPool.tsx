@@ -874,6 +874,20 @@ export function AccountPool(props: AccountPoolProps): ReturnType<typeof h> | nul
           hint: t('row.veilHintList'),
         })
       : null,
+    // Saving gets the same veil as every other write in this section.
+    //
+    // `saving` already spans the whole operation and not merely the write: it
+    // is set before `writePoolPreferences` and cleared in the `finally`, after
+    // `onSaved()` has awaited the re-read (see `save`). So the veil comes down
+    // exactly when the panel shows the stored values — which is the same rule
+    // the removal veil follows, and the reason this needs no extra state.
+    saving
+      ? h(BusyOverlay, {
+          visible: true,
+          message: t('row.poolSaving'),
+          hint: t('row.veilHintList'),
+        })
+      : null,
     // The header is now just the title and the serving-account badge.
     //
     // The subtitle ("4 accounts in this region · target model X") and the

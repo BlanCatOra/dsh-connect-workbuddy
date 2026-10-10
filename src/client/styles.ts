@@ -281,6 +281,13 @@ export const WORKBUDDY_CARD_CSS = `
 .dsm-workbuddy-transfer-list label{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--dsw-alias-label-primary,#e8e9ed);cursor:pointer;padding:2px 0}
 .dsm-workbuddy-transfer-list input[type="checkbox"]{flex:none}
 .dsm-workbuddy-transfer input[type="file"]{font-size:12px;color:var(--dsw-alias-label-primary,#e8e9ed);margin-bottom:8px}
+/* The import picker's input is driven by the 「import」 button, so it must not
+   render as a visible field: hide it from layout AND from assistive tech (the
+   button carries the accessible name). Not display:none alone — that also
+   removes it from the tab order in some engines, which is fine here, but the
+   clip-based form is the one that reliably keeps programmatic .click() working
+   across browsers. */
+.dsm-workbuddy-transfer-file{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 /* The sign-in URL inside the OAuth dialog: long https links must wrap rather
    than push the dialog wide — break-all, since URLs have no soft wrap points. */
 .dsm-workbuddy-oauth-url{word-break:break-all;overflow-wrap:anywhere}

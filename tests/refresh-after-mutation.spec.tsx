@@ -71,6 +71,48 @@ describe('a row removal keeps its veil up until the list re-read lands', () => {
   })
 })
 
+describe('the import button opens the system picker directly', () => {
+  it('shows no dialog before a file is chosen', async () => {
+    // The deleted pre-dialog was a one-line box whose only content was "choose
+    // a JSON file" plus the file input — ceremony in front of a dialog the OS
+    // shows anyway. What must remain is the CONFIRMATION step, which appears
+    // only once there is something to confirm.
+    stubFetch(() => ({ body: {} }))
+    const view = await mount(AccountTransfer, { t, region: 'cn', accounts: [] })
+    // Nothing is on screen until a file is picked.
+    expect(view.container.querySelector('.dsm-workbuddy-transfer-dialog')).toBeNull()
+    // The button delegates to the hidden input rather than rendering a dialog
+    // of its own; spying proves the delegation, which a wording check cannot.
+    const input = view.container.querySelector<HTMLInputElement>('input[type=file]')
+    expect(input).not.toBeNull()
+    const clicked = vi.fn()
+    input!.addEventListener('click', clicked)
+    await view.click(view.button('row.transferImport'))
+    expect(clicked).toHaveBeenCalledTimes(1)
+    // Still no dialog: opening the picker is not a step the user must see.
+    expect(view.container.querySelector('.dsm-workbuddy-transfer-dialog')).toBeNull()
+    await view.unmount()
+  })
+
+  it('shows the confirmation dialog once a file IS chosen', async () => {
+    stubFetch(url => url.includes('action=preview')
+      ? { body: { accounts: [{ index: 0, uid: 'u1', nickname: 'Picked One', email: '', hasToken: true }], total: 1 } }
+      : { body: {} })
+    const view = await mount(AccountTransfer, { t, region: 'cn', accounts: [] })
+    const input = view.container.querySelector<HTMLInputElement>('input[type=file]')
+    const file = new File(['[]'], 'accounts.json', { type: 'application/json' })
+    Object.defineProperty(input!, 'files', { value: [file], configurable: true })
+    await act(() => {
+      input!.dispatchEvent(new window.Event('change', { bubbles: true }))
+      return Promise.resolve()
+    })
+    await view.settle()
+    expect(view.text()).toContain('row.transferPreviewTotal')
+    expect(view.text()).toContain('Picked One')
+    await view.unmount()
+  })
+})
+
 describe('an import asks the card to re-read so the new accounts appear', () => {
   it('calls onChanged after the import is stored', async () => {
     const onChanged = vi.fn(async () => {})
@@ -83,6 +125,7 @@ describe('an import asks the card to re-read so the new accounts appear', () => 
     })
     const view = await mount(AccountTransfer, { t, region: 'cn', accounts: [], onChanged })
     await view.click(view.button('row.transferImport'))
+    // The input lives in the section, not in a pre-dialog.
     const input = view.container.querySelector<HTMLInputElement>('input[type=file]')
     expect(input).not.toBeNull()
     // A picked file resolves through the preview, then the checkbox is on by

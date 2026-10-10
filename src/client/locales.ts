@@ -153,7 +153,10 @@ export const en = {
   'row.transferExported': 'Exported {count} account(s) to {fileName}.',
   'row.transferImport': 'Import accounts',
   'row.transferImporting': 'Importing…',
-  'row.transferImportPick': 'Choose a JSON file exported from this or a compatible tool:',
+  // Shown while the picked file is being parsed. The picker itself is the OS
+  // dialog (the import button opens it directly), so this is the first line the
+  // user sees after choosing — it must say what is happening, not ask again.
+  'row.transferPreviewing': 'Reading the file…',
   'row.transferPreviewTotal': '{total} account(s) in the file — untick what should stay out. Accounts already stored here are overwritten by the import.',
   'row.transferImportConfirm': 'Import {count} account(s)',
   'row.transferImported': 'Imported {imported} account(s); {skipped} skipped (no token, or belongs to the other region).',
@@ -438,7 +441,7 @@ export const zh: Record<WorkBuddySettingsKey, string> = {
   'row.transferExported': '已导出 {count} 个账号到 {fileName}。',
   'row.transferImport': '导入账号',
   'row.transferImporting': '正在导入…',
-  'row.transferImportPick': '选择本插件或同类工具导出的 JSON 文件：',
+  'row.transferPreviewing': '正在读取文件…',
   'row.transferPreviewTotal': '文件中共 {total} 个账号——不需要的请取消勾选。导入会覆盖这里已存储的同名账号。',
   'row.transferImportConfirm': '导入 {count} 个账号',
   'row.transferImported': '已导入 {imported} 个账号；跳过 {skipped} 个（缺 token，或属于另一个区域）。',
