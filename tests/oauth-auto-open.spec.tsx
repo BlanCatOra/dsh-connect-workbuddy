@@ -27,6 +27,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { OAuthSignIn } from '../src/client/OAuthSignIn.tsx'
 import { mount, stubFetch, t } from './pool-render-helpers.tsx'
@@ -124,11 +125,24 @@ describe('the auto-open actually loads the sign-in page', () => {
 })
 
 describe('the placeholder call shape is guarded at the source', () => {
-  // Read from the project root rather than via `import.meta.url`: this file opts
-  // into jsdom, where that URL is an `http://` document address and
-  // `fileURLToPath` rejects it.
+  /**
+   * Resolve the source path from `import.meta.url` through `node:path`.
+   *
+   * Two traps, each of which fails on one machine while passing on another:
+   *   JSDOM   `new URL('../src/…', import.meta.url)` does NOT resolve against
+   *           the module URL in this environment — it resolves against the jsdom
+   *           document, so `fileURLToPath` rejects the result with 「The URL must
+   *           be of scheme file」. This file opts into jsdom for the render
+   *           tests below, so the obvious form is unusable here.
+   *   WINDOWS Building a `file:` URL by concatenating `process.cwd()` is not an
+   *           escape either: the drive letter and backslashes produce a URL
+   *           whose path resolves to `/D:/…`, which no `fs` call accepts. It
+   *           would fail on `windows-latest` only.
+   * `fileURLToPath(import.meta.url)` is correct under both, and `join` keeps the
+   * separators platform-native. Mirrors `tests/client-host-contract.spec.ts`.
+   */
   const source = readFileSync(
-    fileURLToPath(new URL('src/client/OAuthSignIn.tsx', `file://${process.cwd()}/`)),
+    join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'client', 'OAuthSignIn.tsx'),
     'utf8',
   )
 
