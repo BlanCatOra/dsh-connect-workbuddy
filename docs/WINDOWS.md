@@ -77,9 +77,9 @@ WMI 服务（`Win32_Process.Create`）创建的进程与 Electron 宿主同为�
 | issue #13 | Windows 上账号切换被判死 | profile 配置瞬时占用超出了重试预算的全部持有期 |
 | issue #15 | Windows 上加密凭据读不出 | 探测路径缺 `%LOCALAPPDATA%\WorkBuddy`（用户级安装） |
 | 2.1.0（本次） | 宿主内每次进程存活判定都闪一次黑色控制台窗口 | 心跳探测未设 `windowsHide`，而宿主是无控制台的 GUI 进程（§1-5、§2 A 档取证） |
-| 未发布（PR #44） | 「重新检测账号」没能把删掉的账号找回来，而界面什么都不说 | 隐藏名单删除被拒时异常被吞掉（`rm` 的 `force` 不忽略 `EPERM`）——详见下节 |
+| 未发布（PR #44） | 「重新检测账号」没能把删掉的账号找回来，而界面什么都不说 | 隐藏名单删除被拒时异常被吞掉（`rm` 的 `force` 不忽略 `EPERM`）——详见下节（B 档） |
 
-### 「重新检测账号」的静默失败（PR #44，**C 档**，未在真机复现）
+### 「重新检测账号」的静默失败（PR #44，**B 档 CI 实测**）
 
 **现象**：用户删掉一个账号（语义是「暂时隐藏」，文案承诺「点重新检测账号即可找回」），随后点「重新检测账号」——账号**没有回来**，界面**没有任何提示**，按钮看起来像成功了。
 
@@ -89,7 +89,13 @@ WMI 服务（`Win32_Process.Create`）创建的进程与 Electron 宿主同为�
 
 **修法**：unlink 被拒时回退为「经同一把锁原子写入空名单」（对任何读者而言两种结果等价，`readDismissed` 都得到空集合），并把结果**读回来验证**后返回布尔值；路由把 `dismissalsCleared` 转给卡片；卡片新增账户级错误行（`role="alert"`）如实显示——该状态此前只被写入、从未渲染。
 
-**证据档位：C 档**。失败判据与回退路径由 `tests/dismissal-clear-failure.spec.ts` 用注入的 `EPERM` **模拟**（unlink 被拒 → 回退生效；两条路都被拒 → 诚实返回 `false`），**不是在 Windows 真机上观测到的**。按 §2 的规则，本条目不得写成「已验证」。真机升档方法见 §7.3 的同类做法：在该文件被占用时点「重新检测账号」，预期看到错误行而不是静默成功。
+**证据档位：B 档（CI 实测），不是 C 档约定推导。** 关键区别在于**占用是真的由操作系统造成的**，不是注入一个假异常：
+
+- `tests/windows-file-lock.spec.ts` 用 PowerShell 的 `[System.IO.File]::Open($path, 'Open', 'Read', 'Read')` 真占住 `.dismissed.json`，再断言 `clearDismissals()` 返回 `false` 且账号保持隐藏；释放后同一调用转为成功。该文件只在 Windows 上运行，其余平台 skip（`FileShare` 没有 POSIX 等价物，macOS/Linux 上 unlink 对打开的文件照样成功，没有可断言的失败）。
+- **变异验证（在 `windows-latest` 上真跑）**：把 `clearDismissals` 还原成「裸 `rm` + 吞异常、恒返回 `true`」，该文件 **2 例全红**，报错正是 `expected true to be false`——静默成功这个缺陷本身在真实 Windows 上复现并被咬住。还原修复后重新全绿。
+- `FileShare::Read` 是被刻意选中的共享模式（不是 `FileShare::None`）：读仍能成功，所以隐藏**确实仍然生效**，`false` 是诚实答案而非保守猜测。若换成 `FileShare::None`，连读都失败，`readDismissed` 会走「无隐藏」分支、账号自己就回来了，反倒没有可报的失败——这两种模式**相反**的后果见 `tests/dismissal-clear-failure.spec.ts` 里 `both` 与 `write-blocked-read-ok` 两个模式。
+
+未升 A 档的原因：这是 `windows-latest` 虚拟机上的 CI 取证，不是用户真机（未覆盖「某个具体杀毒软件实际持有句柄」的行为）。按 §2 的定义，CI 实测即 B 档；若你在真机上复现出与 CI 不同的形态，欢迎回报以便继续升档。
 
 **共同形态**：Windows 的故障几乎都是**静默**的（不报错、只是没生效），且**只在 Windows 上出现**。因此 Windows 相关的修复必须配「可被变异咬住」的测试，否则回归无人拦。
 

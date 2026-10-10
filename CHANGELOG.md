@@ -26,6 +26,8 @@
   - **现象（Windows）**：`clearDismissals` 原本是 `rm(path, { force: true })` 外面套一个吞掉异常的 `catch`，而 `force` 只忽略「文件不存在」，不忽略拒绝。POSIX 上 `unlink` 对打开的文件照样成功，所以 macOS 看不出问题；Windows 上杀毒/OneDrive/编辑器持有句柄会让它返回 `EPERM`/`EBUSY`/`EACCES`（见 `docs/WINDOWS.md`）。实测结果是**最糟的一种破法**：账号没回来、界面什么都不说、按钮看起来像成功了——而它的文案明确写着「点重新检测账号即可找回」。
   - **修法**：`clearDismissals` 在 unlink 被拒时回退为「经同一把锁原子写入空名单」（对任何读者而言两种结果等价），并把结果**读回来验证**后返回布尔值；路由把 `dismissalsCleared` 转给卡片；卡片新增账户级错误行（`role="alert"`）如实显示。该状态原先只被写入、从未渲染——`accountError` 的渲染一并补上。
   - 测试模拟 Windows 的拒绝：unlink 被拒时回退生效、两条路都失败时诚实返回 `false`、路由转发该标志、卡片真的把它画出来。
+  - **另有一层真机取证**：`tests/windows-file-lock.spec.ts` 用 PowerShell 的 `[System.IO.File]::Open(…, FileShare.Read)` 在 **真实 Windows**（CI 的 `windows-latest`）上占住文件，断言返回 `false` 且账号保持隐藏、释放后同一调用转为成功——占用由操作系统造成，不是注入假异常。其余平台该文件 skip（`FileShare` 无 POSIX 等价物）。
+  - **变异验证在 `windows-latest` 上真跑**：还原成原来的裸 `rm` + 吞异常后，该文件 2 例全红，报错即 `expected true to be false`——静默成功这个缺陷在真实 Windows 上复现并被咬住。据此 `docs/WINDOWS.md` §3 该条按其自身分级规则定为 **B 档（CI 实测）**，并写明未升 A 档的原因。
 
 - **vault 目录里的非凭据文件不再被当成「读不了的凭据」。**（PR #44 评审追加）
   - **现象**：在**完全没有账号**的机器上（只有这种情况才渲染路径列表），删过账号之后，「已探测路径」会多出一条 `…/vault/.dismissed.json — not a readable vault credential`。登录本身是健康的，插件把自己的记账文件读成了坏掉的 token 文件。
