@@ -391,6 +391,29 @@ interface DismissedDocument {
  * dropped, and only far beyond any plausible number of removed accounts.
  */
 const DISMISSED_LIMIT = 1000
+/**
+ * How long one scan may be shared across callers, in milliseconds.
+ *
+ * One page open asks the store for the same account list six times (usage
+ * route: accounts, status, resolve; the credits panel: once PER ACCOUNT through
+ * `credentialFor`; and both region tabs poll together). Each read re-listed the
+ * auth directory, re-parsed every file and re-ran the vault merge — measured at
+ * 6 `readdir` and (6N+12) `readFile` for N accounts.
+ *
+ * Why a WINDOW and not a plain in-flight share: the six reads are SEQUENTIAL
+ * (`await` one after another), so by the time the second starts the first has
+ * resolved and there is nothing in flight to join. Sharing only concurrent reads
+ * optimised nothing at all.
+ *
+ * Why so short: this is not a cache of the account list, it is an admission that
+ * one page open IS one logical read. Anything longer would delay noticing a
+ * sign-in the desktop app made on its own — discovery IS polling, so this window
+ * is how long such a change may stay unseen. The card polls every 60 s, so 1 s is
+ * invisible to the user while collapsing one page open from six scans to one. A
+ * write through this store invalidates the window outright, so the actions the
+ * user takes here (OAuth add, import, remove, rescan) are never delayed by it.
+ */
+const SCAN_SHARE_WINDOW_MS = 1000
 
 /** Read the dismissal list; an absent or unreadable file reads as empty. */
 async function readDismissed(dir: string): Promise<Set<string>> {
@@ -1042,6 +1065,29 @@ export class WorkBuddyCredentialStore {
   private accountId: string | undefined
   private inflight: Promise<WorkBuddyCredential> | undefined
   /**
+   * In-flight/completed scan for the CURRENT `readAll` generation.
+   *
+   * One page open calls `readAll` six times: the usage route asks for the
+   * account list, the sign-in state and the resolved credential, then the
+   * per-account credits panel asks once PER ACCOUNT (`credentialFor`), and both
+   * region tabs poll on the same timer. Each call re-read every auth file,
+   * re-parsed it, and re-ran the vault merge — measured at 6 `readdir` + (6N+12)
+   * `readFile` for N accounts, i.e. the cost grew with the account count on a
+   * path whose answer cannot change within one tick.
+   *
+   * This is deliberately NOT a time-based cache: a TTL would make the card show
+   * a stale account list after an OAuth add or an import, which is the very
+   * class of bug this card keeps chasing. Instead the promise is shared while it
+   * is in flight, and every WRITE clears it (see `invalidateScan`) — so a read
+   * after a write always scans again, and a read during a scan joins it.
+   *
+   * Undefined means "no scan in flight and nothing cached".
+   */
+  private scanInflight: Promise<readonly WorkBuddyCredential[]> | undefined
+  /** When the cached scan was STARTED, epoch ms; only meaningful with it set. */
+  private scanAtMs = 0
+
+  /**
    * A RUNTIME account override from the pool's rotation, or undefined.
    *
    * Deliberately separate from {@link accountId}, which is the user's persisted
@@ -1116,6 +1162,7 @@ export class WorkBuddyCredentialStore {
   setDesktopPath(path: string | undefined): void {
     this.desktopPathOverride = path
     this.inflight = undefined
+    this.invalidateScan()
   }
 
   /**
@@ -1130,6 +1177,7 @@ export class WorkBuddyCredentialStore {
   selectAccount(accountId: string | undefined): void {
     this.accountId = accountId === '' ? undefined : accountId
     this.inflight = undefined
+    this.invalidateScan()
   }
 
   /** Selected account id, for diagnostics and route assembly. */
@@ -1224,7 +1272,40 @@ export class WorkBuddyCredentialStore {
    * region's accounts are invisible to selection, refresh, and status alike,
    * which is what keeps the two regions' providers from cross-billing.
    */
-  private async readAll(): Promise<WorkBuddyCredential[]> {
+  /**
+   * The account list, sharing one scan across concurrent and repeated reads.
+   *
+   * See {@link scanInflight}: the whole performance fix lives in these four
+   * lines. Every caller keeps its OWN semantics (`current`, `accounts`,
+   * `status`, `selectionLost`), because this returns the same array they used
+   * to build themselves — only the filesystem work is shared.
+   *
+   * A failed scan is NOT cached: the rejection clears the slot so the next read
+   * retries, rather than pinning every later caller to one transient failure.
+   */
+  private async readAll(): Promise<readonly WorkBuddyCredential[]> {
+    const now = Date.now()
+    if (this.scanInflight !== undefined && now - this.scanAtMs < SCAN_SHARE_WINDOW_MS) {
+      return this.scanInflight
+    }
+    this.scanAtMs = now
+    this.scanInflight = this.scanAll().catch(error => {
+      // A failed scan is not cached: the next read retries instead of every
+      // later caller inheriting one transient failure.
+      this.scanInflight = undefined
+      throw error
+    })
+    return this.scanInflight
+  }
+
+  /** Drop the shared scan so the next read re-reads the filesystem. */
+  private invalidateScan(): void {
+    this.scanInflight = undefined
+    this.scanAtMs = 0
+  }
+
+  /** The one real scan: read every candidate file, then merge the vault. */
+  private async scanAll(): Promise<readonly WorkBuddyCredential[]> {
     const files = await this.candidateFiles()
     // Dismissed accounts are filtered at BOTH ends of the merge. Here, before
     // the desktop scan joins the map: without this the account is rebuilt into
@@ -1266,7 +1347,12 @@ export class WorkBuddyCredentialStore {
     // set — that is how an OAuth-added account (which no desktop scan will
     // ever re-find) stays selectable across restarts.
     await this.syncVault(byId, dismissed)
-    return [...byId.values()]
+    // FROZEN because this exact array is now handed to several callers (see
+    // {@link scanInflight}). They all treat it as read-only today — find, some,
+    // map — but a future `sort()` or `splice()` on it would silently reorder
+    // every other reader's view for the rest of the window. Freezing turns that
+    // into an immediate TypeError instead of a wrong account list.
+    return Object.freeze([...byId.values()])
   }
 
   /**
@@ -1561,6 +1647,7 @@ export class WorkBuddyCredentialStore {
     // action left that could bring it back.
     await this.forgetDismissal(dir, id)
     this.inflight = undefined
+    this.invalidateScan()
     return id
   }
 
@@ -1600,6 +1687,7 @@ export class WorkBuddyCredentialStore {
    */
   async clearDismissals(): Promise<void> {
     this.inflight = undefined
+    this.invalidateScan()
     try {
       await rm(join(this.vaultDir(), VAULT_DISMISSED_FILENAME), { force: true })
     } catch {
@@ -1681,6 +1769,7 @@ export class WorkBuddyCredentialStore {
       // delete here would be worse, since the vault entry is already gone.
     }
     this.inflight = undefined
+    this.invalidateScan()
     return removed
   }
 
@@ -1700,6 +1789,8 @@ export class WorkBuddyCredentialStore {
     // user's "forget what the plugin stored" action, and the vault is plugin
     // storage. The sibling region's directory is untouched.
     await rm(this.vaultDir(), { recursive: true, force: true })
+    // The account list this store hands out is now empty.
+    this.invalidateScan()
   }
 
   private needsRefresh(credential: WorkBuddyCredential): boolean {
@@ -1732,6 +1823,8 @@ export class WorkBuddyCredentialStore {
       // app last wrote, and the serve rule uses this to keep it (see
       // {@link VaultDocument.refreshedFrom}). OAuth/import writes omit it —
       // nothing was refreshed there, so their precedence is unchanged.
+      // The refreshed token is now IN the vault, so the shared scan is stale.
+      this.invalidateScan()
       await writeVaultEntry(
         this.vaultDir(),
         workbuddyAccountId(credential),
