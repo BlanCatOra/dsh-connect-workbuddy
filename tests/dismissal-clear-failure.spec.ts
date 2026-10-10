@@ -48,22 +48,51 @@ const realFsPromises = await import('node:fs/promises')
 let root = ''
 let authDir = ''
 let vaultDir = ''
-let refusal: 'unlink-only' | 'both' | 'none' = 'none'
+/**
+ * Which refusals the simulated Windows lock produces.
+ *
+ *   none                   ordinary machine: the unlink succeeds.
+ *   unlink-only            the delete is refused, the atomic REPLACE still
+ *                          lands — the case the rewrite fallback exists for.
+ *   both                   every ACCESS to the file fails, reads included, so
+ *                          `readDismissed` answers "nothing hidden" and the
+ *                          hide cannot be applied either.
+ *   write-blocked-read-ok  the delete and the rewrite are refused while the
+ *                          EXISTING list still reads: the hide remains in
+ *                          force, which is the only case the card's error line
+ *                          should ever describe.
+ */
+let refusal: 'unlink-only' | 'both' | 'write-blocked-read-ok' | 'none' = 'none'
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
+  const eperm = (path: string): NodeJS.ErrnoException => {
+    const error = new Error(
+      `EPERM: operation not permitted, unlink '${path}'`,
+    ) as NodeJS.ErrnoException
+    error.code = 'EPERM'
+    return error
+  }
+  const ebusy = (path: string): NodeJS.ErrnoException => {
+    const error = new Error(
+      `EBUSY: resource busy or locked, open '${path}'`,
+    ) as NodeJS.ErrnoException
+    error.code = 'EBUSY'
+    return error
+  }
   return {
     ...actual,
     rm: async (target: never, options: never) => {
       const path = String(target)
-      if (path.endsWith('.dismissed.json') && refusal !== 'none') {
-        const error = new Error(
-          `EPERM: operation not permitted, unlink '${path}'`,
-        ) as NodeJS.ErrnoException
-        error.code = 'EPERM'
-        throw error
-      }
+      if (path.endsWith('.dismissed.json') && refusal !== 'none') throw eperm(path)
       return (actual.rm as never as (...args: never[]) => unknown)(target, options) as never
+    },
+    readFile: async (target: never, ...rest: never[]) => {
+      const path = String(target)
+      // A held-open handle that denies sharing blocks reads as well as deletes;
+      // `write-blocked-read-ok` is the deliberate exception.
+      if (path.endsWith('.dismissed.json') && refusal === 'both') throw ebusy(path)
+      return (actual.readFile as never as (...args: never[]) => unknown)(target, ...rest) as never
     },
   }
 })
@@ -83,7 +112,11 @@ vi.mock('@deepseek-ai/dsh-atomic-write', async (importOriginal) => {
   return {
     ...actual,
     writeFileAtomic: async (filename: never, content: never, options: never) => {
-      if (refusal === 'both' && String(filename).includes('.dismissed.json')) {
+      // Every mode except `none` and `unlink-only` also refuses the REPLACE —
+      // `unlink-only` is precisely the case where the rewrite is expected to
+      // succeed.
+      if ((refusal === 'both' || refusal === 'write-blocked-read-ok')
+        && String(filename).includes('.dismissed.json')) {
         const error = new Error(
           `EPERM: operation not permitted, open '${String(filename)}'`,
         ) as NodeJS.ErrnoException
@@ -128,25 +161,61 @@ function makeStore(): InstanceType<typeof WorkBuddyCredentialStore> {
 
 describe('a manual rescan with the dismissal file locked', () => {
   it('still brings the accounts back, through the rewrite fallback', async () => {
+    // The realistic Windows shape: the file can be UNLINKED against only when
+    // nothing holds it, but a scanner holding it usually blocks the delete while
+    // leaving the atomic REPLACE (create temp + rename) able to land — which is
+    // why the fallback is a rewrite and not a second unlink attempt.
     const first = makeStore()
     const [account] = await first.accounts()
     await first.removeAccount(account!.id)
     expect(await makeStore().accounts()).toEqual([])
 
     refusal = 'unlink-only'
-    // The unlink is refused; the locked file is already gone from the caller's
-    // point of view, so assert on the RESULT rather than on the filesystem.
     const cleared = await makeStore().clearDismissals()
     expect(cleared).toBe(true)
     expect((await makeStore().accounts()).map(a => a.accountName)).toEqual(['WindowsAccount'])
   })
 
-  it('reports false when neither the unlink nor the rewrite can land', async () => {
+  /**
+   * The FULLY locked case: `readFile` fails too, so `readDismissed` answers
+   * 「nothing is hidden」 — the same rule every reader uses (an unreadable list
+   * must never take account discovery down; see `readDismissed`). Two
+   * consequences, both asserted here rather than reasoned about:
+   *
+   *   the ACCOUNT comes back anyway, because a hide that cannot be read cannot
+   *   be applied either — so the user still gets what the button promised; and
+   *   the return value is `true` on that path, which is the HONEST answer and
+   *   not the lie it looks like. It means 「no hides are in force」, which is
+   *   exactly what the accounts() call beside it then shows.
+   *
+   * This test exists because the opposite looks plausible on inspection: a
+   * locked file sounds like it should report failure. It does not, and the two
+   * assertions below are what stop a later reader from "fixing" the return value
+   * into a `false` that would contradict the list the user is looking at.
+   */
+  it('is honest when the file cannot even be read: report matches the list', async () => {
     const first = makeStore()
     const [account] = await first.accounts()
     await first.removeAccount(account!.id)
 
     refusal = 'both'
+    const cleared = await makeStore().clearDismissals()
+    const visible = (await makeStore().accounts()).map(a => a.accountName)
+    // Whatever it reports, it must AGREE with what the user is shown. Pinning
+    // the pair, not one of them, is the point.
+    expect(cleared).toBe(visible.length > 0)
+    expect(visible).toEqual(['WindowsAccount'])
+  })
+
+  it('reports false when the rewrite cannot land but the old list still reads', async () => {
+    const first = makeStore()
+    const [account] = await first.accounts()
+    await first.removeAccount(account!.id)
+
+    // Unlink and rewrite both refused, but the EXISTING list is still readable —
+    // so the hide IS still in force and `false` is the truthful answer. This is
+    // the case the card's error line exists for.
+    refusal = 'write-blocked-read-ok'
     const cleared = await makeStore().clearDismissals()
     // The honest answer, and the one the route forwards to the card. Returning
     // nothing here is what made the button look like it had worked.
