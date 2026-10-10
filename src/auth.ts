@@ -350,10 +350,20 @@ function parseVaultDocumentWithWriteTime(
  * button read as broken (measured: `removeAccount` returns true, `accounts()`
  * still lists it).
  *
- * The list records ids the user explicitly dismissed, so both the merge and the
- * scan skip them. Dismissal is per ACCOUNT, not per source: hiding only the
- * vault copy would leave the same account listed from the desktop file, which
- * is the half-measure that produced the report.
+ * Dismissal means HIDDEN UNTIL THE USER SCANS AGAIN, not deleted forever. A
+ * desktop sign-in is still there in the app, and the manual 「re-scan」 action is
+ * the user asking to see what the machine currently has — so
+ * {@link WorkBuddyCredentialStore.clearDismissals} empties this list on every
+ * manual scan and the accounts return. Without that, a removed account could
+ * never be recovered except by reinstalling or re-signing in.
+ *
+ * The list must survive the automatic refreshes in between: the card polls the
+ * usage route every 60 seconds, and an in-memory-only dismissal would let the
+ * account reappear a minute after the user removed it. Hence a file.
+ *
+ * Dismissal is per ACCOUNT, not per source: hiding only the vault copy would
+ * leave the same account listed from the desktop file, which is the
+ * half-measure that produced the report.
  */
 const VAULT_DISMISSED_FILENAME = '.dismissed.json'
 
@@ -1570,6 +1580,30 @@ export class WorkBuddyCredentialStore {
       await writeDismissed(dir, dismissed)
     } catch {
       // See above: best-effort, never fatal.
+    }
+  }
+  /**
+   * Forget EVERY dismissal, so the next read lists the accounts again.
+   *
+   * Called by the manual 「re-scan」 action. Dismissal is "hide until I ask to
+   * scan again", and this is that ask: the user is requesting what the machine
+   * currently has, which includes accounts they hid earlier. Leaving the list
+   * intact would make a removed desktop account unrecoverable from the UI — the
+   * opposite of what the button promises.
+   *
+   * DELETES the file rather than writing an empty list: an absent file is the
+   * normal state and keeps the vault directory free of a file that says nothing.
+   *
+   * Best-effort by design: a failed removal leaves accounts hidden and is
+   * reported by the caller's own re-read, while throwing here would fail the
+   * scan the user just asked for.
+   */
+  async clearDismissals(): Promise<void> {
+    this.inflight = undefined
+    try {
+      await rm(join(this.vaultDir(), VAULT_DISMISSED_FILENAME), { force: true })
+    } catch {
+      // See above: the scan still runs; the accounts simply stay hidden.
     }
   }
 

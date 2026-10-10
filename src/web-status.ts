@@ -948,7 +948,14 @@ export function registerWorkBuddyStatusRoute(ctx: Context, deps: WorkBuddyStatus
         const region = requestRegion(req, res)
         if (region === undefined) return
         try {
-          const accounts = await deps.store(region).accounts()
+          const store = deps.store(region)
+          // A MANUAL scan is the user asking what this machine currently has,
+          // so it also clears the accounts they removed earlier. Those removals
+          // exist to survive the AUTOMATIC poll (a hidden desktop account must
+          // not pop back a minute later); this button is the explicit way back,
+          // and without it a removed desktop account could never return.
+          await store.clearDismissals()
+          const accounts = await store.accounts()
           deps.regionUsable?.(region, accounts.length > 0)
           json(res, 200, { accounts: accounts.map(toWebAccount) })
         } catch (error: unknown) {

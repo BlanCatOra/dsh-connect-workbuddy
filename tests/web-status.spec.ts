@@ -4,6 +4,7 @@ import { workBuddyAccountCredits, workBuddyWebStatus } from '../src/web-status.t
 import type { WorkBuddyStatusRouteOptions } from '../src/web-status.ts'
 import { readFileSync } from 'node:fs'
 import {
+  WORKBUDDY_ACCOUNTS_REFRESH_PATH,
   WORKBUDDY_CHECKIN_PATH,
   WORKBUDDY_MODELS_REFRESH_PATH,
   WORKBUDDY_OAUTH_PATH,
@@ -557,6 +558,36 @@ describe('registerWorkBuddyStatusRoute', () => {
       '/plugins/dsh-connect-workbuddy/oauth',
       '/plugins/dsh-connect-workbuddy/transfer',
     ])
+  })
+
+  /** Mount the status routes; return the accounts/refresh handler. */
+  async function mountAccountsRefreshHandler(
+    options: Partial<WorkBuddyStatusRouteOptions> = {},
+  ): Promise<CapturedEntry['handler']> {
+    const captured = await mountRoutes(options)
+    const refresh = captured.find(entry => entry.path === WORKBUDDY_ACCOUNTS_REFRESH_PATH)
+    if (refresh === undefined) throw new Error('account refresh route was not registered')
+    return refresh.handler
+  }
+
+  it('clears hidden accounts on a manual scan, then lists what the machine has', async () => {
+    // 「Detect accounts again」 is the user asking for the current accounts, so it
+    // must also undo the hides made by row removal. The order matters: clearing
+    // has to happen BEFORE the read, or the scan would answer with the still-
+    // hidden list and the accounts would only return on the NEXT scan.
+    const order: string[] = []
+    const handler = await mountAccountsRefreshHandler({
+      store: () => ({
+        ...baseStore(),
+        async clearDismissals() { order.push('clear'); },
+        async accounts() { order.push('read'); return ACCOUNTS },
+      }) as never,
+    })
+    const { res, status, body } = response()
+    await handler(request('POST', undefined, WORKBUDDY_ACCOUNTS_REFRESH_PATH + '?region=cn'), res)
+    expect(status()).toBe(200)
+    expect(order).toEqual(['clear', 'read'])
+    expect((body() as { accounts: unknown[] }).accounts.length).toBe(ACCOUNTS.length)
   })
 
   /** Mount the status routes; return the model-refresh handler. */
