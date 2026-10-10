@@ -579,7 +579,7 @@ describe('registerWorkBuddyStatusRoute', () => {
     const handler = await mountAccountsRefreshHandler({
       store: () => ({
         ...baseStore(),
-        async clearDismissals() { order.push('clear'); },
+        async clearDismissals() { order.push('clear'); return true },
         async accounts() { order.push('read'); return ACCOUNTS },
       }) as never,
     })
@@ -587,6 +587,30 @@ describe('registerWorkBuddyStatusRoute', () => {
     await handler(request('POST', undefined, WORKBUDDY_ACCOUNTS_REFRESH_PATH + '?region=cn'), res)
     expect(status()).toBe(200)
     expect(order).toEqual(['clear', 'read'])
+    expect((body() as { accounts: unknown[] }).accounts.length).toBe(ACCOUNTS.length)
+  })
+
+  it('tells the card when the hides could NOT be cleared', async () => {
+    // The manual scan cannot always lift the hides: on Windows a locked vault
+    // file defeats both the unlink and the rewrite (see `clearDismissals`), and
+    // the accounts may legitimately still be hidden afterwards. The route must
+    // FORWARD that answer rather than swallow it — `dismissalsCleared: false` is
+    // what lets the card say 「still hidden」 instead of rendering a button press
+    // that appears to have worked.
+    const handler = await mountAccountsRefreshHandler({
+      store: () => ({
+        ...baseStore(),
+        async clearDismissals() { return false },
+        async accounts() { return ACCOUNTS },
+      }) as never,
+    })
+    const { res, status, body } = response()
+    await handler(request('POST', undefined, WORKBUDDY_ACCOUNTS_REFRESH_PATH + '?region=cn'), res)
+    expect(status()).toBe(200)
+    expect((body() as { dismissalsCleared?: boolean }).dismissalsCleared).toBe(false)
+    // A failed CLEAR is not a failed SCAN: the accounts that are visible must
+    // still come back, or a locked bookkeeping file would cost the user the
+    // whole list.
     expect((body() as { accounts: unknown[] }).accounts.length).toBe(ACCOUNTS.length)
   })
 

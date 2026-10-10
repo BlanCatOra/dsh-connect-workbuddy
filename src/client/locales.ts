@@ -35,6 +35,11 @@ export const en = {
   'row.sourceDsh': 'plugin copy',
   'row.searchedMore': 'Show the {count} path(s) that were not found',
   'row.reloginHint': 'If errors occur, sign back in to the WorkBuddy app.',
+  // Shown when the Host reports that the hidden accounts could NOT be brought
+  // back: on Windows a locked vault file can defeat both the unlink and the
+  // rewrite. Says what happened and what to do, instead of leaving the user
+  // with a rescan that looks like it worked.
+  'row.rescanHidesKept': 'The accounts you removed are still hidden: the plugin could not update its own list file. On Windows this is usually a file lock — close antivirus or sync tools that may be holding files in the DSH profile, then try again.',
   'row.credentialRejectedTitle': 'WorkBuddy refused this account\'s token',
   'row.credentialRejectedIntro': 'The token for "{accountName}" is no longer accepted by the upstream, so credits and check-in are unavailable. Signing in again only helps if the problem is the token itself — here is what actually applies:',
   'row.credentialRejectedSwitch': 'Another sign-in on this machine answered the upstream: "{accountName}". Switching to it fixes this — no need to sign in again.',
@@ -118,7 +123,6 @@ export const en = {
   // (placeholder-window-in-gesture); the copy/reopen buttons are the fallback
   // when that open is blocked.
   'row.oauthOpenHint': 'Open the sign-in page and confirm — the account is added here automatically when you finish:',
-  'row.oauthOpen': 'Open sign-in page',
   'row.oauthOpened': 'Opened. Waiting for you to finish…',
   'row.oauthWaiting': 'Waiting for the sign-in to finish… ({seconds}s)',
   'row.oauthExpires': 'The sign-in window expires in about {minutes} min.',
@@ -127,7 +131,6 @@ export const en = {
   'row.oauthTimedOut': 'The sign-in timed out — start again when ready.',
   'row.oauthDone': 'Added “{accountName}”. Pick it above to use it.',
   'row.oauthError': 'Sign-in failed: {message}',
-  'row.oauthUnavailable': 'QR sign-in is not offered by this build of the plugin.',
   'row.oauthCopy': 'Copy link',
   'row.oauthCopied': 'Link copied',
   'row.oauthReopen': 'Open page again',
@@ -138,7 +141,6 @@ export const en = {
   // stays shared, so the two regions cannot drift apart on the rest.
   'row.oauthTitleGlobal': 'Add an account by web sign-in',
   'row.oauthStartGlobal': 'Sign in on the web',
-  'row.oauthUnavailableGlobal': 'Web sign-in is not offered by this build of the plugin.',
   // ---- Shared busy veil ----
   // The line under a veil's scenario text: why the row under it has not moved
   // yet. Same words for every operation, because the wait is the same wait.
@@ -332,6 +334,9 @@ export const zh: Record<WorkBuddySettingsKey, string> = {
   'row.sourceDsh': '插件副本',
   'row.searchedMore': '显示另外 {count} 条「不存在」的路径',
   'row.reloginHint': '出现错误，重新登录 WorkBuddy APP 即可。',
+  // 隐藏账号没能恢复时显示：Windows 上被占用的文件会让删除与改写双双失败。
+  // 说明发生了什么、该做什么，而不是让用户以为「重新检测」成功了。
+  'row.rescanHidesKept': '已删除的账号仍是隐藏状态：插件没能更新自己的名单文件。Windows 上通常是文件被占用——请关闭可能正在占用 DSH 配置目录的杀毒/同步工具后重试。',
   'row.credentialRejectedTitle': 'WorkBuddy 拒绝了这个账号的 token',
   'row.credentialRejectedIntro': '「{accountName}」的 token 已不被上游接受，所以积分与签到都用不了。重新登录只在「确实是 token 的问题」时才有用——当前实际适用的是下面这一条：',
   'row.credentialRejectedSwitch': '本机另一个账号「{accountName}」刚刚实测可用，切换到它即可恢复，不必重新登录。',
@@ -410,7 +415,6 @@ export const zh: Record<WorkBuddySettingsKey, string> = {
   // 弹窗内点击后自动在浏览器打开授权页（手势内占位窗口导航）；复制/重开按钮是
   // 打开被拦时的兜底。
   'row.oauthOpenHint': '打开登录页并完成确认——完成后账号会自动出现在这里：',
-  'row.oauthOpen': '打开登录页',
   'row.oauthOpened': '已打开，等待你完成登录…',
   'row.oauthWaiting': '正在等待登录完成…（{seconds} 秒）',
   'row.oauthExpires': '登录窗口约 {minutes} 分钟后过期。',
@@ -419,7 +423,6 @@ export const zh: Record<WorkBuddySettingsKey, string> = {
   'row.oauthTimedOut': '登录超时——请重新开始。',
   'row.oauthDone': '已添加「{accountName}」。在上方选中它即可使用。',
   'row.oauthError': '登录失败：{message}',
-  'row.oauthUnavailable': '当前版本的插件不支持扫码登录。',
   'row.oauthCopy': '复制链接',
   'row.oauthCopied': '已复制链接',
   'row.oauthReopen': '重新打开页面',
@@ -428,7 +431,6 @@ export const zh: Record<WorkBuddySettingsKey, string> = {
   // 其余（等待、取消、完成）与方式无关，继续共用，避免两个区域在别处走偏。
   'row.oauthTitleGlobal': '网页登录添加账号',
   'row.oauthStartGlobal': '网页登录',
-  'row.oauthUnavailableGlobal': '当前版本的插件不支持网页登录。',
   // ---- 共用缓冲遮罩 ----
   'row.veilHintList': '完成后列表会立即刷新。',
   'row.oauthSyncing': '正在添加账号…',

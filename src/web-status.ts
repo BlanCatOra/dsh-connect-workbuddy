@@ -954,10 +954,16 @@ export function registerWorkBuddyStatusRoute(ctx: Context, deps: WorkBuddyStatus
           // exist to survive the AUTOMATIC poll (a hidden desktop account must
           // not pop back a minute later); this button is the explicit way back,
           // and without it a removed desktop account could never return.
-          await store.clearDismissals()
+          //
+          // The answer is VERIFIED, not assumed, and travels to the card: on
+          // Windows a locked file can defeat both the unlink and the rewrite
+          // (see `clearDismissals`), and silently returning a still-hidden list
+          // would leave the user pressing a button that reports success while
+          // the account they want back stays invisible.
+          const dismissalsCleared = await store.clearDismissals()
           const accounts = await store.accounts()
           deps.regionUsable?.(region, accounts.length > 0)
-          json(res, 200, { accounts: accounts.map(toWebAccount) })
+          json(res, 200, { accounts: accounts.map(toWebAccount), dismissalsCleared })
         } catch (error: unknown) {
           json(res, 500, { error: safeMessage(error) })
         }

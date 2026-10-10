@@ -28,6 +28,7 @@
     "tests/composer-credits-gate.spec.ts",
     "tests/composer-credits-render.spec.tsx",
     "tests/refresh-after-mutation.spec.tsx",
-    "tests/oauth-wording.spec.tsx"
+    "tests/oauth-wording.spec.tsx",
+    "tests/oauth-auto-open.spec.tsx"
   ]
 }

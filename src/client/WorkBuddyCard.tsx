@@ -525,13 +525,24 @@ export function WorkBuddyCard({ t, settingsScope, view }: WorkBuddyCardProps & {
    */
   const rescanAccounts = async (): Promise<void> => {
     setBusy(true)
+    setAccountError(undefined)
     try {
       const response = await fetch(withWorkBuddyRegion(WORKBUDDY_ACCOUNTS_REFRESH_PATH, activeRegion), {
         method: 'POST', headers: { accept: 'application/json' }, credentials: 'same-origin',
       })
-      const body = await response.json() as { accounts?: { id: string }[] }
+      const body = await response.json() as { accounts?: { id: string }[]; dismissalsCleared?: boolean }
       if (!response.ok || !Array.isArray(body.accounts)) throw new Error(`HTTP ${response.status}`)
+      // The Host VERIFIES that the hides are gone (see `clearDismissals`) and
+      // says so; `false` means a locked vault file defeated both the unlink and
+      // the rewrite. Without this line the card showed a successful scan while
+      // the account the user was trying to recover stayed hidden — the button
+      // silently not doing what its own tooltip promises.
+      //
+      // Absent means a Host that predates the flag, which is not a failure.
+      if (body.dismissalsCleared === false) setAccountError(t('row.rescanHidesKept'))
       await refreshUsage(activeRegion)
+    } catch (error: unknown) {
+      if (mounted.current) setAccountError(error instanceof Error ? error.message : t('row.requestFailed'))
     } finally {
       if (mounted.current) setBusy(false)
     }
@@ -1145,6 +1156,16 @@ export function WorkBuddyCard({ t, settingsScope, view }: WorkBuddyCardProps & {
                   ? null
                   : <p className="dsm-workbuddy-usage-hint">{t('row.reloginHint')}</p>
                 : null}
+              {/* The ACCOUNT-level failures: a rescan whose hides could not be
+                  lifted, and an account switch that was refused. This state was
+                  already written by both paths but never rendered, so a refused
+                  write and a stuck-vault re-scan both read as clicks that did
+                  nothing. Rendered here, once, above the panels it explains —
+                  both call sites are on this card, and neither owns a status
+                  area of its own. */}
+              {accountError === undefined
+                ? null
+                : <p className="dsm-workbuddy-account-error" role="alert">{accountError}</p>}
               {selectionLost
                 ? <p className="dsm-workbuddy-usage-hint">{t('row.selectionLostHint')}</p>
                 : null}

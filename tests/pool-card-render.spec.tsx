@@ -398,3 +398,32 @@ describe('the two commit rows now look alike', () => {
     await m.unmount()
   })
 })
+
+describe('the account-level error is actually rendered', () => {
+  it('shows what the Host said when the hides could not be cleared', async () => {
+    // `rescanAccounts` writes `accountError` for TWO reasons — a refused write
+    // and a rescan whose hides stayed put — and until this change nothing
+    // rendered it: the state was set on every failure path and displayed on
+    // none. The user's evidence was a button that appeared to work. This pins
+    // the rendering half against the card's own DOM, because the wiring half
+    // (the route flag) is asserted in `tests/web-status.spec.ts`.
+    routeFetch([
+      ['/accounts/refresh', () => ({ body: { accounts: [{ accountId: 'real-1' }], dismissalsCleared: false } })],
+      [USAGE_PATH, () => ({ body: usageOf() })],
+      ['*', () => ({ body: {} })],
+    ])
+    const m = await mount(WorkBuddyCard, { t, settingsScope: fakeScope({}), view: 'page' })
+    await m.settle()
+    // Before the rescan there is no error line.
+    expect(m.container.querySelector('.dsm-workbuddy-account-error')).toBeNull()
+    const rescan = m.buttons().find(button => (button.textContent ?? '').includes('row.accountsRescan'))
+    expect(rescan, 'no rescan button rendered').toBeDefined()
+    await m.click(rescan!)
+    await m.settle()
+    const error = m.container.querySelector('.dsm-workbuddy-account-error')
+    expect(error, 'the failed clear was not surfaced').not.toBeNull()
+    expect(error?.getAttribute('role')).toBe('alert')
+    expect(error?.textContent).toContain('row.rescanHidesKept')
+    await m.unmount()
+  })
+})

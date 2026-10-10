@@ -448,6 +448,28 @@ async function writeDismissed(dir: string, dismissed: ReadonlySet<string>): Prom
   })
 }
 
+/**
+ * Whether a directory entry is ONE ACCOUNT's vault credential file.
+ *
+ * The vault directory holds more than credentials: `writeDismissed` puts
+ * `.dismissed.json` here, and atomic writes transiently leave
+ * `<id>.json.<hex>.tmp` siblings behind. Both used to be swept up by a bare
+ * `endsWith('.json')` check, and the DISMISSAL file in particular is
+ * well-formed JSON that is not a credential — so `diagnose` reported it at the
+ * user as 「not a readable vault credential」 on any machine where an account
+ * had been removed, turning a healthy sign-in into an unreadable-looking one.
+ *
+ * The rule is the account id shape the store itself writes
+ * ({@link VAULT_ACCOUNT_ID_RE}), not a naming convention: a file qualifies only
+ * when its stem is a real id, which no bookkeeping or temp file can be. A
+ * `.tmp` sibling therefore fails on the dot of its extension, and a hidden file
+ * fails on its leading dot even before that.
+ */
+function isVaultCredentialFileName(name: string): boolean {
+  if (!name.endsWith('.json')) return false
+  return VAULT_ACCOUNT_ID_RE.test(name.slice(0, -'.json'.length))
+}
+
 /** Current on-disk format of the vault; readers reject others. */
 const VAULT_FORMAT_VERSION = 1
 
@@ -891,7 +913,11 @@ async function readVaultEntries(dir: string): Promise<Map<string, VaultEntry>> {
     throw error
   }
   for (const name of names) {
-    if (!name.endsWith('.json')) continue
+    // Credential files only: `.dismissed.json` and `.tmp` siblings live in this
+    // directory too, and parsing them here would either add a bogus entry or
+    // (the real defect) surface as an unreadable credential to the user. See
+    // {@link isVaultCredentialFileName}.
+    if (!isVaultCredentialFileName(name)) continue
     const path = join(dir, name)
     try {
       const parsed = parseVaultDocumentWithWriteTime(await readFile(path, 'utf8'), path)
@@ -1678,21 +1704,45 @@ export class WorkBuddyCredentialStore {
    * intact would make a removed desktop account unrecoverable from the UI — the
    * opposite of what the button promises.
    *
-   * DELETES the file rather than writing an empty list: an absent file is the
+   * PREFERS deleting the file over writing an empty list: an absent file is the
    * normal state and keeps the vault directory free of a file that says nothing.
+   * The unlink is not the only way, though, because on Windows removing a file
+   * another process holds open fails with `EPERM`/`EBUSY`/`EACCES` — an antivirus
+   * scanner, OneDrive, or an editor with it open, the same contention the card's
+   * `isFileContentionWriteError` classifies for profile writes and the reason
+   * `docs/WINDOWS.md` keeps a register. POSIX unlinks open files happily, so
+   * without this the promise 「点重新检测账号即可找回」 would be false, silently,
+   * on exactly the platform it matters most on.
    *
-   * Best-effort by design: a failed removal leaves accounts hidden and is
-   * reported by the caller's own re-read, while throwing here would fail the
-   * scan the user just asked for.
+   * So the unlink falls back to OVERWRITING the list with an empty one through
+   * the same locked atomic write `writeDismissed` uses. For every reader the two
+   * outcomes are identical (`readDismissed` yields no ids either way), so the
+   * user's ask is honoured even when the file itself cannot be removed.
+   *
+   * Returns whether the dismissals are now genuinely gone, VERIFIED by reading
+   * the list back rather than by trusting the write: the caller renders this, so
+   * "it worked" has to mean it. A `false` is the honest answer for a vault that
+   * could neither be unlinked nor rewritten, and the rescan still runs — the
+   * accounts simply stay hidden, which the UI can now say out loud instead of
+   * showing a button that appears to have done nothing.
    */
-  async clearDismissals(): Promise<void> {
+  async clearDismissals(): Promise<boolean> {
     this.inflight = undefined
     this.invalidateScan()
+    const dir = this.vaultDir()
+    const path = join(dir, VAULT_DISMISSED_FILENAME)
     try {
-      await rm(join(this.vaultDir(), VAULT_DISMISSED_FILENAME), { force: true })
+      await rm(path, { force: true })
     } catch {
-      // See above: the scan still runs; the accounts simply stay hidden.
+      // Windows-shaped contention. Fall through to the overwrite.
+      try {
+        await writeDismissed(dir, new Set())
+      } catch {
+        // Neither path worked; report it rather than pretending.
+        return (await readDismissed(dir)).size === 0
+      }
     }
+    return (await readDismissed(dir)).size === 0
   }
 
   /**
@@ -1943,7 +1993,12 @@ export class WorkBuddyCredentialStore {
     const tried = [...await this.candidateFiles(), ...this.ownCandidates()]
     try {
       const names = await readdir(this.vaultDir())
-      for (const name of names.filter(entry => entry.endsWith('.json'))) {
+      // Credential files only — this loop REPORTS what it cannot parse, so
+      // every non-credential file it admits becomes a failure line at the user.
+      // `.dismissed.json` is well-formed JSON but not a credential, and it made
+      // a healthy machine look broken the moment an account was removed. See
+      // {@link isVaultCredentialFileName}.
+      for (const name of names.filter(isVaultCredentialFileName)) {
         const path = join(this.vaultDir(), name)
         tried.push(path)
         let text: string

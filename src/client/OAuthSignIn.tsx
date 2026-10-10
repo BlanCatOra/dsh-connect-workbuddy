@@ -156,6 +156,32 @@ export function OAuthSignIn({ t, region, onAdded }: OAuthSignInProps): ReactElem
   }, [onAdded, phase, pollTick, region])
 
   /**
+   * Open a placeholder window WITHOUT `noopener`, and deliberately so.
+   *
+   * `noopener` is the correct feature for a link whose destination never needs
+   * a handle — and that is exactly why it is wrong here. Per the spec, a
+   * `window.open` call carrying `noopener` opens the tab but returns `null`
+   * (MDN: "the new window will not have access to the originating window via
+   * `Window.opener` and returns `null`"). The placeholder exists ONLY to be
+   * navigated once the Host answers, so the handle IS the point: passing
+   * `noopener` made `placeholder` null, the navigation was skipped, and every
+   * sign-in left an empty `about:blank` tab behind instead of the sign-in page.
+   *
+   * The security property is kept, just established on the handle instead of
+   * through the feature: `opener = null` is applied to the placeholder before
+   * anything is loaded into it, so the destination still cannot reach back
+   * through `window.opener`. `noreferrer` is dropped for the same reason —
+   * the spec makes it imply `noopener`, so it would reintroduce the null.
+   * Nothing is lost: the placeholder is same-origin and empty until navigated,
+   * and the referrer would only ever have been the settings page.
+   */
+  function openPlaceholder(): Window | null {
+    const placeholder = window.open('', '_blank')
+    if (placeholder !== null) placeholder.opener = null
+    return placeholder
+  }
+
+  /**
    * Fetch the authorization URL AND open the browser in one gesture chain.
    * The placeholder window is opened synchronously — inside the click's user
    * activation, before any await — so popup blocking cannot intervene; the
@@ -205,11 +231,14 @@ export function OAuthSignIn({ t, region, onAdded }: OAuthSignInProps): ReactElem
    * window must be created synchronously to count as a user gesture. */
   const beginSignIn = (): void => {
     setDialogOpen(true)
-    const placeholder = window.open('', '_blank', 'noopener,noreferrer')
-    void start(placeholder)
+    void start(openPlaceholder())
   }
 
-  /** Re-open the sign-in page from the waiting dialog (no new session). */
+  /** Re-open the sign-in page from the waiting dialog (no new session).
+   *
+   * Here `noopener,noreferrer` IS right: this is a one-way navigation to a
+   * third-party page and nothing needs a handle on it — the contrast with
+   * {@link openPlaceholder} is the whole distinction. */
   const reopen = (): void => {
     if (phase.kind !== 'waiting') return
     window.open(phase.verificationUri, '_blank', 'noopener,noreferrer')
