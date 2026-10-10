@@ -27,6 +27,7 @@
     "tests/card-credits-switch.spec.tsx",
     "tests/composer-credits-gate.spec.ts",
     "tests/composer-credits-render.spec.tsx",
-    "tests/client-runtime-imports.spec.ts"
+    "tests/client-runtime-imports.spec.ts",
+    "tests/refresh-after-mutation.spec.tsx"
   ]
 }

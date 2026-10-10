@@ -38,6 +38,7 @@ import type {
   WorkBuddyWebRegion,
 } from '../status-paths.ts'
 import { exclusionText } from './exclusion-text.ts'
+import { BusyOverlay } from './BusyOverlay.tsx'
 import type { Translate } from './searched-paths.ts'
 import { readNdjson } from './ndjson.ts'
 import { inlineProbeReason } from './probe-reason.ts'
@@ -154,8 +155,14 @@ export interface AccountPoolProps {
    * credits from BEFORE the check-in until the next 60-second poll, and a
    * freshly measured probe outcome stayed invisible. The pool section does not
    * own that fetch, so it asks the card for it, exactly as a save does.
+   *
+   * RETURNS A PROMISE when the caller can report when the fresh snapshot has
+   * landed. A row removal keeps its veil up until then: the row is still on
+   * screen while the re-read is in flight, and dismissing the veil before the
+   * fresh props arrive is precisely what made a delete look like it had not
+   * happened. Callers that cannot await it keep the fire-and-forget void form.
    */
-  onRefresh?: () => void
+  onRefresh?: () => void | Promise<unknown>
   /**
    * Account-ADDING and account-MIGRATION controls, rendered inside the pool
    * settings block, ABOVE the preference rows.
@@ -680,6 +687,14 @@ export function AccountPool(props: AccountPoolProps): ReturnType<typeof h> | nul
 
   /** The account whose per-row action is in flight; gates every row's buttons. */
   const [rowBusyAccountId, setRowBusyAccountId] = useState<string | undefined>(undefined)
+  /**
+   * Which per-row action is running, for the veil's scenario line.
+   *
+   * A removal and a test both set `rowBusyAccountId`, but they mean different
+   * things to the person watching ("this account is going away" versus "this
+   * account is being measured") — and the veil exists precisely to say which.
+   */
+  const [rowBusyAction, setRowBusyAction] = useState<'test' | 'remove' | undefined>(undefined)
 
   /**
    * Test ONE account from its row.
@@ -690,6 +705,7 @@ export function AccountPool(props: AccountPoolProps): ReturnType<typeof h> | nul
    */
   const runRowTest = useCallback(async (accountId: string): Promise<void> => {
     setRowBusyAccountId(accountId)
+    setRowBusyAction('test')
     setActionError(undefined)
     const url = withWorkBuddyRegionAndAction(WORKBUDDY_POOL_PATH, region, 'test')
       + '&' + WORKBUDDY_POOL_ACCOUNT_PARAM + '=' + encodeURIComponent(accountId)
@@ -730,7 +746,10 @@ export function AccountPool(props: AccountPoolProps): ReturnType<typeof h> | nul
         appendLog(t('row.poolLogBatchFailed', { message }), 'error')
       }
     } finally {
-      if (mounted.current) setRowBusyAccountId(undefined)
+      if (mounted.current) {
+        setRowBusyAccountId(undefined)
+        setRowBusyAction(undefined)
+      }
     }
   }, [appendLog, onRefresh, region, t])
 
@@ -741,6 +760,7 @@ export function AccountPool(props: AccountPoolProps): ReturnType<typeof h> | nul
    */
   const runRowRemove = useCallback(async (accountId: string, accountName: string): Promise<void> => {
     setRowBusyAccountId(accountId)
+    setRowBusyAction('remove')
     setActionError(undefined)
     const url = withWorkBuddyRegionAndAction(WORKBUDDY_POOL_PATH, region, 'remove')
       + '&' + WORKBUDDY_POOL_ACCOUNT_PARAM + '=' + encodeURIComponent(accountId)
@@ -765,7 +785,12 @@ export function AccountPool(props: AccountPoolProps): ReturnType<typeof h> | nul
             }),
         body?.removed === true ? 'ok' : 'info',
       )
-      onRefresh?.()
+      // AWAIT the re-read. The row is still rendered from the OLD snapshot
+      // until it lands, and the veil is what covers that gap — dropping it
+      // here (as the fire-and-forget call did) left the deleted row sitting
+      // on screen with no sign that anything was still happening, which reads
+      // as a delete that did not work.
+      await onRefresh?.()
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : t('row.requestFailed')
       if (mounted.current) {
@@ -773,7 +798,10 @@ export function AccountPool(props: AccountPoolProps): ReturnType<typeof h> | nul
         appendLog(t('row.poolLogBatchFailed', { message }), 'error')
       }
     } finally {
-      if (mounted.current) setRowBusyAccountId(undefined)
+      if (mounted.current) {
+        setRowBusyAccountId(undefined)
+        setRowBusyAction(undefined)
+      }
     }
   }, [appendLog, onRefresh, region, t])
 
@@ -812,6 +840,18 @@ export function AccountPool(props: AccountPoolProps): ReturnType<typeof h> | nul
     : currentAccount.accountName === '' ? t('row.accountUnnamed') : currentAccount.accountName
 
   return h('section', { className: 'dsm-workbuddy-pool' },
+    // The row veil: a removal writes the Host state, and the table only
+    // changes once the re-read lands. That gap is what the user used to sit
+    // through in silence, reading a still-listed account as "the delete did
+    // nothing". A test keeps no veil — it changes no row membership, and its
+    // result already has its own line in the log.
+    rowBusyAction === 'remove'
+      ? h(BusyOverlay, {
+          visible: true,
+          message: t('row.poolRowRemoving'),
+          hint: t('row.veilHintList'),
+        })
+      : null,
     // The header is now just the title and the serving-account badge.
     //
     // The subtitle ("4 accounts in this region · target model X") and the

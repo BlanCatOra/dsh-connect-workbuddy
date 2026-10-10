@@ -132,6 +132,11 @@ export const en = {
   'row.oauthCopied': 'Link copied',
   'row.oauthReopen': 'Open page again',
   'row.oauthDialogClose': 'Close',
+  // ---- Shared busy veil ----
+  // The line under a veil's scenario text: why the row under it has not moved
+  // yet. Same words for every operation, because the wait is the same wait.
+  'row.veilHintList': 'The list refreshes as soon as this finishes.',
+  'row.oauthSyncing': 'Adding the account…',
   'row.transferTitle': 'Export / import accounts',
   'row.transferHint': 'Move accounts between computers as a JSON file. The file carries the credentials — keep it private. The format is shared with other WorkBuddy credential managers.',
   'row.transferExport': 'Export accounts',
@@ -261,6 +266,7 @@ export const en = {
   'row.poolRowRemoveHint': 'Forget this account\'s plugin-stored credential. A desktop-app sign-in reappears on the next scan — only the plugin\'s own copy is deleted.',
   'row.poolRowRemoveAria': 'Remove the stored credential of {accountName}',
   'row.poolRowRemoved': '{accountName}: removed from the plugin\'s storage.',
+  'row.poolRowRemoving': 'Removing the account…',
   'row.poolRowRemoveDesktopOnly': '{accountName}: nothing plugin-stored to remove — this account comes from the desktop app\'s own sign-in.',
   'row.showCreditsCn': 'Show WB CN credits in the composer',
   'row.showCreditsGlobal': 'Show WB AI credits in the composer',
@@ -408,6 +414,9 @@ export const zh: Record<WorkBuddySettingsKey, string> = {
   'row.oauthCopied': '已复制链接',
   'row.oauthReopen': '重新打开页面',
   'row.oauthDialogClose': '关闭',
+  // ---- 共用缓冲遮罩 ----
+  'row.veilHintList': '完成后列表会立即刷新。',
+  'row.oauthSyncing': '正在添加账号…',
   'row.transferTitle': '导出 / 导入账号',
   'row.transferHint': '用 JSON 文件在电脑之间迁移账号。文件里是账号凭据——请妥善保管。该格式与同类 WorkBuddy 凭据管理工具通用。',
   'row.transferExport': '导出账号',
@@ -535,6 +544,7 @@ export const zh: Record<WorkBuddySettingsKey, string> = {
   'row.poolRowRemoveHint': '删除插件保存的这个账号凭据。桌面 App 的登录不会被删除——下次扫描它还会出现；只有插件自己的副本会被移除。',
   'row.poolRowRemoveAria': '删除 {accountName} 的已存凭据',
   'row.poolRowRemoved': '{accountName}：已从插件存储中移除。',
+  'row.poolRowRemoving': '正在删除账号…',
   'row.poolRowRemoveDesktopOnly': '{accountName}：没有插件存储的凭据可删——这个账号来自桌面 App 自己的登录。',
   'row.showCreditsCn': '在对话框显示 WB CN 积分',
   'row.showCreditsGlobal': '在对话框显示 WB AI 积分',

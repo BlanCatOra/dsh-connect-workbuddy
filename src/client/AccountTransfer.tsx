@@ -20,6 +20,7 @@ import type { ReactElement } from 'react'
 import { WORKBUDDY_TRANSFER_PATH, withWorkBuddyRouteAction } from '../status-paths.ts'
 import type { WorkBuddyWebRegion, WorkBuddyTransferPreview } from '../status-paths.ts'
 import type { Translate } from './searched-paths.ts'
+import { BusyOverlay } from './BusyOverlay.tsx'
 
 /** Props: the region tab, the card's copy, and the accounts the Host knows. */
 export interface AccountTransferProps {
@@ -27,12 +28,29 @@ export interface AccountTransferProps {
   region: WorkBuddyWebRegion
   /** The region's accounts (id + name), token-free, from the usage snapshot. */
   accounts: readonly { id: string, accountName: string }[]
+  /**
+   * Called after an import actually added something, so the CARD can re-read
+   * its snapshot.
+   *
+   * Without this the import was invisible: the freshly written vault entry
+   * only reaches the account table on the card's next usage poll — and when
+   * the region had NO account before the import, that poll is not even
+   * running (it starts only once a region is signed in), so the new account
+   * appeared only after the settings page was closed and reopened. That is
+   * the exact "imported but still not listed" the veil below now narrates.
+   *
+   * Resolves when the re-read has landed; the veil stays up until it does,
+   * which is what turns the old silent gap into a visible step.
+   */
+  onChanged?: () => void | Promise<unknown>
 }
 
 type Phase =
   | { kind: 'idle' }
   | { kind: 'exporting' }
   | { kind: 'importing' }
+  /** The write landed; the list re-read is still in flight. */
+  | { kind: 'refreshing', message: string }
   | { kind: 'done', message: string }
   | { kind: 'error', message: string }
 
@@ -59,7 +77,7 @@ function downloadJson(fileName: string, data: unknown): void {
 /** The section. Rendered on both sign-in states — a signed-out machine can
  * still import a file exported elsewhere; export without accounts answers
  * the error line. */
-export function AccountTransfer({ t, region, accounts }: AccountTransferProps): ReactElement {
+export function AccountTransfer({ t, region, accounts, onChanged }: AccountTransferProps): ReactElement {
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' })
   const [dialog, setDialog] = useState<'export' | 'import' | undefined>(undefined)
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
@@ -149,7 +167,14 @@ export function AccountTransfer({ t, region, accounts }: AccountTransferProps): 
         return
       }
       closeDialog()
-      setPhase({ kind: 'done', message: t('row.transferImported', { imported: body.imported, skipped: body.skipped ?? 0 }) })
+      const message = t('row.transferImported', { imported: body.imported, skipped: body.skipped ?? 0 })
+      // Hold the veil across the re-read, not just across the write. The write
+      // is the fast half; the account table is what the user is looking at, and
+      // it only changes once the fresh snapshot lands.
+      setPhase({ kind: 'refreshing', message })
+      await onChanged?.()
+      if (!mounted.current) return
+      setPhase({ kind: 'done', message })
     } catch (error: unknown) {
       if (mounted.current) {
         setPhase({ kind: 'error', message: error instanceof Error ? error.message : String(error) })
@@ -157,10 +182,19 @@ export function AccountTransfer({ t, region, accounts }: AccountTransferProps): 
     }
   }
 
-  const busy = phase.kind === 'exporting' || phase.kind === 'importing'
+  const busy = phase.kind === 'exporting' || phase.kind === 'importing' || phase.kind === 'refreshing'
+  /** The veil's scenario line: what is happening, in the user's terms. */
+  const veilMessage = phase.kind === 'exporting'
+    ? t('row.transferExporting')
+    : phase.kind === 'importing' || phase.kind === 'refreshing'
+      ? t('row.transferImporting')
+      : ''
 
   return (
     <section className="dsm-workbuddy-bar" aria-label={t('row.transferTitle')}>
+      {/* The hint is passed only when there IS a veil: `exactOptionalPropertyTypes`
+          treats an explicit `undefined` as a different type from an absent prop. */}
+      <BusyOverlay visible={busy} message={veilMessage} {...busy ? { hint: t('row.veilHintList') } : {}} />
       <p className="dsm-workbuddy-bar-label">{t('row.transferTitle')}</p>
       {phase.kind === 'done'
         ? <p className="dsm-workbuddy-bar-status dsm-workbuddy-bar-ok">{phase.message}</p>

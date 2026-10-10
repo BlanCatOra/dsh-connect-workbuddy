@@ -182,7 +182,7 @@ describe('card class names are styled', () => {
    * component that only renders inside a dialog is hard to reach, while a
    * missing rule is exactly the failure this guards.
    */
-  const components = ['OAuthSignIn.tsx', 'AccountTransfer.tsx', 'WorkBuddyCard.tsx', 'AccountPool.tsx'] as const
+  const components = ['OAuthSignIn.tsx', 'AccountTransfer.tsx', 'BusyOverlay.tsx', 'WorkBuddyCard.tsx', 'AccountPool.tsx'] as const
 
   it('defines every class those components render', () => {
     const css = cardCss()

@@ -286,6 +286,23 @@ export const WORKBUDDY_CARD_CSS = `
 .dsm-workbuddy-oauth-url{word-break:break-all;overflow-wrap:anywhere}
 .dsm-workbuddy-oauth-url a{color:var(--dsw-alias-brand-primary,#5686fe);text-decoration:none}
 .dsm-workbuddy-oauth-url a:hover{text-decoration:underline}
+/* The shared busy veil: a fixed overlay for operations whose result only shows
+   up after the list re-read (remove / import / sign-in).
+   It is NOT a modal: no control, no dismissal — only "this is running" and
+   "here is why nothing moved yet". Fixed positioning so it covers the card
+   regardless of which section started the operation, and a semi-transparent
+   backdrop so the table stays visible underneath — the user is watching a
+   specific row change, and hiding it would defeat the point. */
+.dsm-workbuddy-veil{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.38);cursor:progress}
+.dsm-workbuddy-veil-card{display:flex;flex-direction:column;align-items:center;gap:8px;max-width:min(340px,80vw);padding:16px 20px;border:1px solid var(--dsw-alias-border-l2,#3a3d45);border-radius:12px;background:var(--dsw-alias-bg-primary,#1b1c20);box-shadow:0 8px 28px rgba(0,0,0,.35)}
+.dsm-workbuddy-veil-text{font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary,#e8e9ed);text-align:center}
+.dsm-workbuddy-veil-hint{font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary,#999);text-align:center}
+/* The spinner is the one thing that proves the UI is alive when the row under
+   it has not changed yet — which is precisely the confusion the veil exists to
+   remove. Reduced-motion users get the static ring instead of a rotation. */
+.dsm-workbuddy-veil-spinner{width:18px;height:18px;border:2px solid var(--dsw-alias-border-l2,#3a3d45);border-top-color:var(--dsw-alias-brand-primary,#5686fe);border-radius:50%;animation:dsm-workbuddy-veil-spin .7s linear infinite}
+@keyframes dsm-workbuddy-veil-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion: reduce){.dsm-workbuddy-veil-spinner{animation:none}}
 `
 /**
  * Composer credit readout styles, injected by the readout component itself.

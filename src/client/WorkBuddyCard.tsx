@@ -483,8 +483,25 @@ export function WorkBuddyCard({ t, settingsScope, view }: WorkBuddyCardProps & {
   const status: WorkBuddyWebUsage = statusByRegion[activeRegion]
     ?? { status: 'signed-out', accounts: [], selectionExplicit: false }
 
+  /**
+   * Whether the ACTIVE region knows of any account at all.
+   *
+   * This is the poll's precondition in place of `status === 'signed-in'`. The
+   * signed-in flag means "a credential resolves", which is false for a region
+   * whose accounts exist but none is usable yet — exactly the state an import
+   * or a fresh OAuth sign-in creates. Polling on it meant those regions never
+   * refreshed, so the list stayed empty until the card was reopened.
+   */
+  const hasAccounts = status.status !== 'error' && status.accounts.length > 0
+
   useEffect(() => {
-    if (!open || status.status !== 'signed-in') return
+    // Gate on HAVING AN ACCOUNT, not on `signed-in`. A region whose only
+    // accounts were just imported or just signed in through OAuth is not
+    // `signed-in` (no credential resolves yet), so gating on that status left
+    // the very case the import/sign-in produces with no poll at all — the new
+    // account could only appear after the card was closed and reopened. An
+    // account list is the real precondition for wanting a refresh.
+    if (!open || !hasAccounts) return
     const controller = new AbortController()
     const timer = window.setInterval(() => { void refreshUsage(activeRegion, controller.signal) }, POLL_INTERVAL_MS)
     return () => {
@@ -977,10 +994,20 @@ export function WorkBuddyCard({ t, settingsScope, view }: WorkBuddyCardProps & {
    */
   const accountTools = (
     <>
-      <OAuthSignIn t={t} region={activeRegion} />
+      <OAuthSignIn
+        t={t}
+        region={activeRegion}
+        // A finished sign-in stores a credential the Host's snapshot predates;
+        // re-read so the new account appears while the veil is still up.
+        onAdded={() => refreshUsage(activeRegion)}
+      />
       <AccountTransfer
         t={t}
         region={activeRegion}
+        // An import writes vault entries the Host already had no snapshot of;
+        // re-read so the new accounts join the table while the veil is still
+        // up, instead of on some later poll the region may not even run.
+        onChanged={() => refreshUsage(activeRegion)}
         // The error branch reports no accounts, and the transfer section is
         // not rendered there — passing an empty list keeps the type honest
         // without inventing a fallback that could only ever be wrong.
@@ -1199,7 +1226,10 @@ export function WorkBuddyCard({ t, settingsScope, view }: WorkBuddyCardProps & {
                       // snapshot was actually applied; a superseded or failed
                       // re-read resolves `false` and the draft is kept.
                       onSaved={async () => (await refreshUsage(activeRegion)) !== undefined}
-                      onRefresh={() => { void refreshUsage(activeRegion) }}
+                      // Hands the PROMISE back, not a fire-and-forget call: the
+                      // pool keeps its row veil up until the fresh snapshot has landed
+                      // (see the `onRefresh` prop note in AccountPool).
+                      onRefresh={() => refreshUsage(activeRegion)}
                     />
 
                     <section className="dsm-workbuddy-models" aria-label={t('row.modelsTitle')}>

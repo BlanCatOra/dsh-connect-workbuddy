@@ -24,11 +24,22 @@ import type { ReactElement } from 'react'
 import { OAUTH_POLL_INTERVAL_MS, WORKBUDDY_OAUTH_PATH, withWorkBuddyRouteAction } from '../status-paths.ts'
 import type { WorkBuddyWebRegion } from '../status-paths.ts'
 import type { Translate } from './searched-paths.ts'
+import { BusyOverlay } from './BusyOverlay.tsx'
 
 /** Props: the region tab the section is rendered on, and the card's copy. */
 export interface OAuthSignInProps {
   t: Translate
   region: WorkBuddyWebRegion
+  /**
+   * Called once the Host has stored the credential, so the CARD can re-read
+   * its snapshot and show the new account immediately.
+   *
+   * The account only reaches the table through the usage route; without this
+   * the row appeared on the next poll, and on a region that had no account
+   * before the sign-in there was no poll at all — the new account showed up
+   * only after the card was closed and reopened.
+   */
+  onAdded?: () => void | Promise<unknown>
 }
 
 /** One poll's body as the Host's route answers it. */
@@ -40,6 +51,8 @@ type Phase =
   | { kind: 'idle' }
   | { kind: 'opening' }
   | { kind: 'waiting', loginId: string, verificationUri: string, startedAtMs: number, expiresAtMs: number }
+  /** The Host stored the credential; the card's re-read is still in flight. */
+  | { kind: 'syncing', accountName: string }
   | { kind: 'finished', message: 'added' | 'cancelled' | 'error', accountName?: string, error?: string }
 
 /** Seconds since the login started, for the waiting line. */
@@ -62,7 +75,7 @@ async function copyUrl(url: string): Promise<boolean> {
  * its first account here; a signed-in one can add another without leaving
  * the card.
  */
-export function OAuthSignIn({ t, region }: OAuthSignInProps): ReactElement {
+export function OAuthSignIn({ t, region, onAdded }: OAuthSignInProps): ReactElement {
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' })
   const [dialogOpen, setDialogOpen] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -120,11 +133,14 @@ export function OAuthSignIn({ t, region }: OAuthSignInProps): ReactElement {
           if (typeof body.error === 'string' && body.error !== '') {
             setPhase({ kind: 'finished', message: 'error', error: body.error })
           } else {
-            setPhase({
-              kind: 'finished',
-              message: 'added',
-              accountName: body.accountName ?? '',
-            })
+            const accountName = body.accountName ?? ''
+            // Hold the veil across the re-read: the credential is stored, but
+            // the account table changes only when the card's fresh snapshot
+            // lands. Same reasoning as the import path in AccountTransfer.
+            setPhase({ kind: 'syncing', accountName })
+            await onAdded?.()
+            if (cancelled || !mounted.current) return
+            setPhase({ kind: 'finished', message: 'added', accountName })
           }
         } catch {
           // A transport blip is not a dead login; the next tick retries, and
@@ -137,7 +153,7 @@ export function OAuthSignIn({ t, region }: OAuthSignInProps): ReactElement {
       cancelled = true
       clearTimeout(timer)
     }
-  }, [phase, pollTick, region])
+  }, [onAdded, phase, pollTick, region])
 
   /**
    * Fetch the authorization URL AND open the browser in one gesture chain.
@@ -209,6 +225,13 @@ export function OAuthSignIn({ t, region }: OAuthSignInProps): ReactElement {
 
   return (
     <section className="dsm-workbuddy-bar" aria-label={t('row.oauthTitle')}>
+      {/* Sign-in writes a credential and the account table then re-reads; the
+          veil covers the gap so the new row appears without a manual reopen. */}
+      <BusyOverlay
+        visible={phase.kind === 'syncing'}
+        message={t('row.oauthSyncing')}
+        hint={t('row.veilHintList')}
+      />
       <p className="dsm-workbuddy-bar-label">{t('row.oauthTitle')}</p>
       {phase.kind === 'finished'
         ? <p className={`dsm-workbuddy-bar-status ${phase.message === 'added' ? 'dsm-workbuddy-bar-ok' : 'dsm-workbuddy-bar-error'}`}>{finishText}</p>
