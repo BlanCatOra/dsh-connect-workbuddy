@@ -542,6 +542,42 @@ describe('manual mode can actually pick the serving account', () => {
     expect(select?.disabled, 'a second change must not race the first write').toBe(true)
     await m.unmount()
   })
+
+  it('keeps describing the RUNNING pool while the switch is an unsaved draft', async () => {
+    // The draft/committed split, respected here for the same reason as
+    // everywhere else in this section: Save is what makes an edit real. The
+    // picker is part of the pool's RUNNING state, so an unsaved flip of the
+    // switch must not change it — with `active.enabled` it did, revealing a
+    // picker whose selection the still-running pool would override (the
+    // "shows A, bills B" trap).
+    const m = await mount(AccountPool, baseProps({
+      onSelectAccount: () => {},
+      pool: poolOf({ enabled: false, accounts: OTHERS, memberAccountIds: [GENUINE_ID], effectiveMemberAccountIds: [GENUINE_ID] }),
+    }))
+    // The pool is OFF on disk, so manual mode is what is running.
+    expect(m.container.querySelector('select.dsm-workbuddy-pool-account-select')).not.toBeNull()
+    // Flip the switch ON without saving: a dirty draft, not a running pool.
+    await m.click(m.toggles()[0]!)
+    // Manual mode is still what bills, so the picker and its note stay.
+    expect(m.container.querySelector('select.dsm-workbuddy-pool-account-select')).not.toBeNull()
+    expect(m.text()).toContain('row.poolEnabledHint')
+    await m.unmount()
+  })
+
+  it('does not reveal the picker until a pool-off edit is SAVED', async () => {
+    // The mirror case: with the pool ON the picker is absent, and an unsaved
+    // "off" flip must not reveal it — the ranking still picks who serves.
+    const m = await mount(AccountPool, baseProps({
+      onSelectAccount: () => {},
+      pool: poolOf({ enabled: true, accounts: OTHERS, memberAccountIds: [GENUINE_ID], effectiveMemberAccountIds: [GENUINE_ID] }),
+    }))
+    expect(m.container.querySelector('select.dsm-workbuddy-pool-account-select')).toBeNull()
+    await m.click(m.toggles()[0]!)
+    expect(m.container.querySelector('select.dsm-workbuddy-pool-account-select')).toBeNull()
+    // The edit is still registered, so Save stays available.
+    expect(m.button('row.poolSaved').disabled).toBe(false)
+    await m.unmount()
+  })
 })
 
 describe('the settings commit row matches the model section', () => {

@@ -323,6 +323,24 @@ export function AccountPool(props: AccountPoolProps): ReturnType<typeof h> | nul
   }
   // The draft only applies to the tab it was made on.
   const active: PoolPreferences = draftRegion === region && draft !== null ? draft : saved
+  /**
+   * Whether the pool is RUNNING right now, which is the SAVED value.
+   *
+   * `active` is the user's draft and only becomes reality at Save. Using it for
+   * the parts that DESCRIBE the running pool made the card state a mode that had
+   * not taken effect yet: flipping the switch off (unsaved) revealed the manual
+   * picker while the pool was still ranking every request, so the picker showed
+   * the rotated account as "in use" and a selection made there was overridden by
+   * the very pool the user was looking at — the "shows A, bills B" trap this
+   * section keeps guarding against. The mirror case was milder but the same
+   * class of wrong: turning the pool ON (unsaved) hid the picker while the manual
+   * account was still the one being billed.
+   *
+   * Everything that reports pool state reads this; only the switch itself (its
+   * controlled value) and `dirty` read the draft, because those two ARE about
+   * the pending edit.
+   */
+  const poolRunning = saved.enabled
   const dirty = draftRegion === region && draft !== null && (
     draft.enabled !== saved.enabled
     || draft.targetModelId !== saved.targetModelId
@@ -884,7 +902,7 @@ export function AccountPool(props: AccountPoolProps): ReturnType<typeof h> | nul
     // because with the pool ON it changed nothing while looking authoritative).
     // Without this, "the pool is off" meant "you are stuck with whatever was
     // selected before", which is not a mode anyone can use.
-    !active.enabled && onSelectAccount !== undefined && pool.accounts.length > 0
+    !poolRunning && onSelectAccount !== undefined && pool.accounts.length > 0
       ? h('div', { className: 'dsm-workbuddy-pool-set' },
           h('span', { className: 'dsm-workbuddy-pool-set-copy' },
             h('b', null, t('row.poolManualAccountLabel')),
@@ -982,14 +1000,14 @@ export function AccountPool(props: AccountPoolProps): ReturnType<typeof h> | nul
           ),
     ),
 
-    !active.enabled
+    !poolRunning
       ? h('p', { className: 'dsm-workbuddy-pool-note' }, t('row.poolEnabledHint'))
       : null,
 
     // Failover needs somewhere to go. With every member measured unusable (or
     // none checked at all) a failure is reported instead of retried, so say so
     // rather than leaving the user to infer it from a failed request.
-    active.enabled && usable.length === 0
+    poolRunning && usable.length === 0
       ? h('p', { className: 'dsm-workbuddy-pool-warn', role: 'status' },
           `${t('row.poolNoCandidate')} ${t('row.poolNoCandidateHint')}`)
       : null,

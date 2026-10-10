@@ -110,7 +110,7 @@ export const en = {
   'row.probeError': 'Could not run the test: {message}',
   'row.cheer': 'Star on GitHub',
 
-  // ---- OAuth QR sign-in ----
+  // ---- OAuth sign-in (QR on CN, web page on the international build) ----
   'row.oauthTitle': 'Add an account by QR sign-in',
   'row.oauthStart': 'Sign in with QR code',
   'row.oauthStarting': 'Opening…',
@@ -132,6 +132,13 @@ export const en = {
   'row.oauthCopied': 'Link copied',
   'row.oauthReopen': 'Open page again',
   'row.oauthDialogClose': 'Close',
+  // The INTERNATIONAL sign-in is a browser page, not a QR code — the CN build
+  // scans with the WorkBuddy app. Only the three strings that NAME the method
+  // are split; every other line (waiting, cancel, done) is method-agnostic and
+  // stays shared, so the two regions cannot drift apart on the rest.
+  'row.oauthTitleGlobal': 'Add an account by web sign-in',
+  'row.oauthStartGlobal': 'Sign in on the web',
+  'row.oauthUnavailableGlobal': 'Web sign-in is not offered by this build of the plugin.',
   // ---- Shared busy veil ----
   // The line under a veil's scenario text: why the row under it has not moved
   // yet. Same words for every operation, because the wait is the same wait.
@@ -393,7 +400,7 @@ export const zh: Record<WorkBuddySettingsKey, string> = {
   'row.probeError': '无法执行测试：{message}',
   'row.cheer': '鼓励一下',
 
-  // ---- OAuth 扫码登录 ----
+  // ---- OAuth 登录（国内扫码，国际版网页） ----
   'row.oauthTitle': '扫码添加账号',
   'row.oauthStart': '扫码登录',
   'row.oauthStarting': '正在打开…',
@@ -414,6 +421,11 @@ export const zh: Record<WorkBuddySettingsKey, string> = {
   'row.oauthCopied': '已复制链接',
   'row.oauthReopen': '重新打开页面',
   'row.oauthDialogClose': '关闭',
+  // 国际版登录是浏览器网页，国内版才是用 App 扫码。只拆「称呼登录方式」的三条，
+  // 其余（等待、取消、完成）与方式无关，继续共用，避免两个区域在别处走偏。
+  'row.oauthTitleGlobal': '网页登录添加账号',
+  'row.oauthStartGlobal': '网页登录',
+  'row.oauthUnavailableGlobal': '当前版本的插件不支持网页登录。',
   // ---- 共用缓冲遮罩 ----
   'row.veilHintList': '完成后列表会立即刷新。',
   'row.oauthSyncing': '正在添加账号…',

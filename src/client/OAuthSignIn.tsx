@@ -215,6 +215,17 @@ export function OAuthSignIn({ t, region, onAdded }: OAuthSignInProps): ReactElem
     window.open(phase.verificationUri, '_blank', 'noopener,noreferrer')
   }
 
+  /**
+   * The three strings that NAME the sign-in method, per region.
+   *
+   * CN signs in by scanning a QR code with the WorkBuddy app; the international
+   * build signs in on a web page. Every other line in this section (waiting,
+   * cancel, done, copy) is about the flow, not the method, so it stays shared —
+   * splitting it too would let the two regions drift apart for no gain.
+   */
+  const titleKey = region === 'cn' ? 'row.oauthTitle' : 'row.oauthTitleGlobal'
+  const startKey = region === 'cn' ? 'row.oauthStart' : 'row.oauthStartGlobal'
+
   const finishText = phase.kind === 'finished'
     ? phase.message === 'added'
       ? t('row.oauthDone', { accountName: phase.accountName === '' || phase.accountName === undefined ? t('row.accountUnnamed') : phase.accountName })
@@ -224,7 +235,7 @@ export function OAuthSignIn({ t, region, onAdded }: OAuthSignInProps): ReactElem
     : ''
 
   return (
-    <section className="dsm-workbuddy-bar" aria-label={t('row.oauthTitle')}>
+    <section className="dsm-workbuddy-bar" aria-label={t(titleKey)}>
       {/* Sign-in writes a credential and the account table then re-reads; the
           veil covers the gap so the new row appears without a manual reopen. */}
       <BusyOverlay
@@ -232,7 +243,7 @@ export function OAuthSignIn({ t, region, onAdded }: OAuthSignInProps): ReactElem
         message={t('row.oauthSyncing')}
         hint={t('row.veilHintList')}
       />
-      <p className="dsm-workbuddy-bar-label">{t('row.oauthTitle')}</p>
+      <p className="dsm-workbuddy-bar-label">{t(titleKey)}</p>
       {phase.kind === 'finished'
         ? <p className={`dsm-workbuddy-bar-status ${phase.message === 'added' ? 'dsm-workbuddy-bar-ok' : 'dsm-workbuddy-bar-error'}`}>{finishText}</p>
         : phase.kind === 'waiting'
@@ -245,11 +256,11 @@ export function OAuthSignIn({ t, region, onAdded }: OAuthSignInProps): ReactElem
           disabled={phase.kind === 'opening'}
           onClick={beginSignIn}
         >
-          {phase.kind === 'opening' ? t('row.oauthStarting') : t('row.oauthStart')}
+          {phase.kind === 'opening' ? t('row.oauthStarting') : t(startKey)}
         </button>
       </div>
       {dialogOpen
-        ? <div className="dsm-workbuddy-transfer-dialog" role="dialog" aria-label={t('row.oauthTitle')}>
+        ? <div className="dsm-workbuddy-transfer-dialog" role="dialog" aria-label={t(titleKey)}>
             {phase.kind === 'opening'
               ? <p>{t('row.oauthStarting')}</p>
               : phase.kind === 'waiting'
