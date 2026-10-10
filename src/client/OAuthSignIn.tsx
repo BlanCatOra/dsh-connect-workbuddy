@@ -1,17 +1,20 @@
 /**
- * The card's OAuth QR sign-in section.
+ * The card's OAuth QR sign-in section: one resting bar row plus a dialog
+ * opened by the sign-in button.
  *
- * 参考：扫码登录的通行形态 —— 发起登录 → 打开授权页 →
- *   轮询到完成为止 → 展示结果。本实现把轮询循环压成一个组件内 effect：
- *   打开授权页的是用户点击的链接（浏览器标签页，非弹窗），组件只负责
- *   按 `OAUTH_POLL_INTERVAL_MS` 节奏问 Host「完成了吗」，完成即停。
+ * 参考：workbuddy2api-panel 的「添加账号」弹窗交互形态 —— 静态入口一行，
+ *   点开后弹窗内分步走：获取授权链接 → 自动打开浏览器 → 弹窗内显示链接
+ *   与等待状态 → 完成/失败回填结果。本实现沿用该步骤划分；弹窗样式直接
+ *   用本项目导出/导入弹框的类（dsm-workbuddy-transfer-dialog），不引入
+ *   第二套视觉。
+ * 改动：自动打开浏览器。弹窗拦截的规避方式是「用户手势内同步 window.open
+ *   占位，拿到授权 URL 后再导航」——点击「获取授权链接」的那一刻浏览器
+ *   仍认定这是用户激活的手势链，占位窗口不会被拦；若 Host 环境连占位都
+ *   拦（返回 null），降级为弹窗内手动「打开登录页」链接，功能不损失。
  *
- * 为什么不用 window.open：卡片运行在 Harness 的设置页 iframe/沙箱里，弹窗
- *   会被拦截；把授权 URL 渲染成普通链接（target=_blank rel=noopener）是
- *   沙箱内最可靠的方式，用户也可以复制链接到手机上继续（URL 即登录态）。
- *
- * 所有状态就地管理，零跨组件往返：取消 = 停止轮询 + 清理 loginId；
- * Host 重启导致 loginId 失效会得到 done+error，与超时同一条文案路径。
+ * 轮询循环压成一个组件内 effect：按 `OAUTH_POLL_INTERVAL_MS` 节奏问 Host
+ *   「完成了吗」，完成即停。所有状态就地管理，零跨组件往返；Host 重启
+ *   导致 loginId 失效会得到 done+error，与超时同一条文案路径。
  *
  * @module dsh-connect-workbuddy/client/OAuthSignIn
  */
@@ -44,6 +47,16 @@ function elapsedSeconds(sinceMs: number, nowMs: number): number {
   return Math.max(0, Math.floor((nowMs - sinceMs) / 1000))
 }
 
+/** Copy the sign-in URL to the clipboard; true on success. */
+async function copyUrl(url: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(url)
+    return true
+  } catch {
+    return false
+  }
+}
+
 /**
  * The section. Rendered on BOTH sign-in states: a signed-out machine gains
  * its first account here; a signed-in one can add another without leaving
@@ -51,6 +64,8 @@ function elapsedSeconds(sinceMs: number, nowMs: number): number {
  */
 export function OAuthSignIn({ t, region }: OAuthSignInProps): ReactElement {
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' })
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const [copied, setCopied] = useState(false)
   const [pollTick, setPollTick] = useState(0)
   const [nowMs, setNowMs] = useState(() => Date.now())
   const mounted = useRef(true)
@@ -74,7 +89,7 @@ export function OAuthSignIn({ t, region }: OAuthSignInProps): ReactElement {
       if (now > expiresAtMs) setPhase({ kind: 'finished', message: 'error', error: t('row.oauthTimedOut') })
     }, 1000)
     return () => { clearInterval(timer) }
-  }, [waiting, phase])
+  }, [waiting, phase, t])
 
   // The poll loop: one request per interval while waiting, ending on done.
   // A pending answer bumps `pollTick`, which re-arms this effect for the next
@@ -124,8 +139,17 @@ export function OAuthSignIn({ t, region }: OAuthSignInProps): ReactElement {
     }
   }, [phase, pollTick, region])
 
-  const start = async (): Promise<void> => {
+  /**
+   * Fetch the authorization URL AND open the browser in one gesture chain.
+   * The placeholder window is opened synchronously — inside the click's user
+   * activation, before any await — so popup blocking cannot intervene; the
+   * URL is navigated once the Host answers. A blocked placeholder (null)
+   * degrades to the manual link inside the dialog, losing nothing but the
+   * convenience.
+   */
+  const start = async (placeholder: Window | null): Promise<void> => {
     setPhase({ kind: 'opening' })
+    setCopied(false)
     try {
       const response = await fetch(withWorkBuddyRouteAction(WORKBUDDY_OAUTH_PATH, region, 'start'), {
         method: 'POST',
@@ -134,10 +158,14 @@ export function OAuthSignIn({ t, region }: OAuthSignInProps): ReactElement {
       })
       const body = await response.json() as
         | { loginId?: string, verificationUri?: string, expiresIn?: number, error?: string }
-      if (!mounted.current) return
+      if (!mounted.current) { placeholder?.close(); return }
       if (!response.ok || typeof body.loginId !== 'string' || typeof body.verificationUri !== 'string') {
+        placeholder?.close()
         setPhase({ kind: 'finished', message: 'error', error: body.error ?? `HTTP ${response.status}` })
         return
+      }
+      if (placeholder !== null) {
+        placeholder.location.href = body.verificationUri
       }
       setPhase({
         kind: 'waiting',
@@ -150,58 +178,98 @@ export function OAuthSignIn({ t, region }: OAuthSignInProps): ReactElement {
       })
       setNowMs(Date.now())
     } catch (error: unknown) {
+      placeholder?.close()
       if (mounted.current) {
         setPhase({ kind: 'finished', message: 'error', error: error instanceof Error ? error.message : String(error) })
       }
     }
   }
 
-  if (phase.kind === 'finished') {
-    const text = phase.message === 'added'
+  /** Open the dialog and begin the login in the same click: the placeholder
+   * window must be created synchronously to count as a user gesture. */
+  const beginSignIn = (): void => {
+    setDialogOpen(true)
+    const placeholder = window.open('', '_blank', 'noopener,noreferrer')
+    void start(placeholder)
+  }
+
+  /** Re-open the sign-in page from the waiting dialog (no new session). */
+  const reopen = (): void => {
+    if (phase.kind !== 'waiting') return
+    window.open(phase.verificationUri, '_blank', 'noopener,noreferrer')
+  }
+
+  const finishText = phase.kind === 'finished'
+    ? phase.message === 'added'
       ? t('row.oauthDone', { accountName: phase.accountName === '' || phase.accountName === undefined ? t('row.accountUnnamed') : phase.accountName })
       : phase.message === 'cancelled'
         ? t('row.oauthCancelled')
         : t('row.oauthError', { message: phase.error ?? '' })
-    return (
-      <section className="dsm-workbuddy-bar" aria-label={t('row.oauthTitle')}>
-        <p className={`dsm-workbuddy-bar-status ${phase.message === 'added' ? 'dsm-workbuddy-bar-ok' : 'dsm-workbuddy-bar-error'}`}>{text}</p>
-        <button type="button" className="dsm-btn dsm-btn-outline" onClick={() => { setPhase({ kind: 'idle' }) }}>
-          {t('row.oauthStart')}
-        </button>
-      </section>
-    )
-  }
+    : ''
 
   return (
     <section className="dsm-workbuddy-bar" aria-label={t('row.oauthTitle')}>
       <p className="dsm-workbuddy-bar-label">{t('row.oauthTitle')}</p>
-      {phase.kind === 'waiting'
-        ? <>
-            <p className="dsm-workbuddy-bar-status">
-              <a href={phase.verificationUri} target="_blank" rel="noopener noreferrer">{t('row.oauthOpen')}</a>
-              {' — '}{t('row.oauthOpened')}
-            </p>
-            <p className="dsm-workbuddy-bar-hint">
-              {t('row.oauthWaiting', { seconds: elapsedSeconds(phase.startedAtMs, nowMs) })}
-              {' '}
-              {t('row.oauthExpires', { minutes: Math.max(1, Math.round((phase.expiresAtMs - nowMs) / 60_000)) })}
-            </p>
-            <button
-              type="button"
-              className="dsm-btn dsm-btn-outline"
-              onClick={() => { setPhase({ kind: 'finished', message: 'cancelled' }) }}
-            >
-              {t('row.oauthCancel')}
-            </button>
-          </>
-        : <button
-            type="button"
-            className="dsm-btn dsm-btn-outline"
-            disabled={phase.kind === 'opening'}
-            onClick={() => { void start() }}
-          >
-            {phase.kind === 'opening' ? t('row.oauthStarting') : t('row.oauthStart')}
-          </button>}
+      {phase.kind === 'finished'
+        ? <p className={`dsm-workbuddy-bar-status ${phase.message === 'added' ? 'dsm-workbuddy-bar-ok' : 'dsm-workbuddy-bar-error'}`}>{finishText}</p>
+        : phase.kind === 'waiting'
+          ? <p className="dsm-workbuddy-bar-status">{t('row.oauthOpened')}</p>
+          : null}
+      <div className="dsm-workbuddy-bar-actions">
+        <button
+          type="button"
+          className="dsm-btn dsm-btn-outline"
+          disabled={phase.kind === 'opening'}
+          onClick={beginSignIn}
+        >
+          {phase.kind === 'opening' ? t('row.oauthStarting') : t('row.oauthStart')}
+        </button>
+      </div>
+      {dialogOpen
+        ? <div className="dsm-workbuddy-transfer-dialog" role="dialog" aria-label={t('row.oauthTitle')}>
+            {phase.kind === 'opening'
+              ? <p>{t('row.oauthStarting')}</p>
+              : phase.kind === 'waiting'
+                ? <>
+                    <p>{t('row.oauthOpenHint')}</p>
+                    <p className="dsm-workbuddy-oauth-url">
+                      <a href={phase.verificationUri} target="_blank" rel="noopener noreferrer">{phase.verificationUri}</a>
+                    </p>
+                    <p className="dsm-workbuddy-hint">
+                      {t('row.oauthWaiting', { seconds: elapsedSeconds(phase.startedAtMs, nowMs) })}
+                      {' '}
+                      {t('row.oauthExpires', { minutes: Math.max(1, Math.round((phase.expiresAtMs - nowMs) / 60_000)) })}
+                    </p>
+                    <div className="dsm-workbuddy-transfer-dialog-actions">
+                      <button
+                        type="button"
+                        className="dsm-btn dsm-btn-outline"
+                        onClick={() => { void copyUrl(phase.verificationUri).then(ok => { if (mounted.current) setCopied(ok) }) }}
+                      >
+                        {copied ? t('row.oauthCopied') : t('row.oauthCopy')}
+                      </button>
+                      <button type="button" className="dsm-btn dsm-btn-outline" onClick={reopen}>{t('row.oauthReopen')}</button>
+                      <button
+                        type="button"
+                        className="dsm-btn dsm-btn-outline"
+                        onClick={() => { setPhase({ kind: 'finished', message: 'cancelled' }) }}
+                      >
+                        {t('row.oauthCancel')}
+                      </button>
+                    </div>
+                  </>
+                : phase.kind === 'finished'
+                  ? <>
+                      <p className={`${phase.message === 'added' ? 'dsm-workbuddy-bar-ok' : phase.message === 'error' ? 'dsm-workbuddy-bar-error' : ''}`}>{finishText}</p>
+                      <div className="dsm-workbuddy-transfer-dialog-actions">
+                        <button type="button" className="dsm-btn dsm-btn-outline" onClick={() => { setDialogOpen(false) }}>
+                          {t('row.oauthDialogClose')}
+                        </button>
+                      </div>
+                    </>
+                  : null}
+          </div>
+        : null}
     </section>
   )
 }

@@ -114,8 +114,9 @@ export const en = {
   'row.oauthTitle': 'Add an account by QR sign-in',
   'row.oauthStart': 'Sign in with QR code',
   'row.oauthStarting': 'Opening…',
-  // The link IS the authorization page: opening it shows the QR to scan with
-  // the phone that has the WorkBuddy app, or a login form on desktop browsers.
+  // The dialog opens the authorization page in the browser automatically
+  // (placeholder-window-in-gesture); the copy/reopen buttons are the fallback
+  // when that open is blocked.
   'row.oauthOpenHint': 'Open the sign-in page and confirm — the account is added here automatically when you finish:',
   'row.oauthOpen': 'Open sign-in page',
   'row.oauthOpened': 'Opened. Waiting for you to finish…',
@@ -127,6 +128,10 @@ export const en = {
   'row.oauthDone': 'Added “{accountName}”. Pick it above to use it.',
   'row.oauthError': 'Sign-in failed: {message}',
   'row.oauthUnavailable': 'QR sign-in is not offered by this build of the plugin.',
+  'row.oauthCopy': 'Copy link',
+  'row.oauthCopied': 'Link copied',
+  'row.oauthReopen': 'Open page again',
+  'row.oauthDialogClose': 'Close',
   'row.transferTitle': 'Export / import accounts',
   'row.transferHint': 'Move accounts between computers as a JSON file. The file carries the credentials — keep it private. The format is shared with other WorkBuddy credential managers.',
   'row.transferExport': 'Export accounts',
@@ -386,7 +391,8 @@ export const zh: Record<WorkBuddySettingsKey, string> = {
   'row.oauthTitle': '扫码添加账号',
   'row.oauthStart': '扫码登录',
   'row.oauthStarting': '正在打开…',
-  // 链接本身就是授权页：手机上用 WorkBuddy App 扫码，桌面浏览器则直接登录。
+  // 弹窗内点击后自动在浏览器打开授权页（手势内占位窗口导航）；复制/重开按钮是
+  // 打开被拦时的兜底。
   'row.oauthOpenHint': '打开登录页并完成确认——完成后账号会自动出现在这里：',
   'row.oauthOpen': '打开登录页',
   'row.oauthOpened': '已打开，等待你完成登录…',
@@ -398,6 +404,10 @@ export const zh: Record<WorkBuddySettingsKey, string> = {
   'row.oauthDone': '已添加「{accountName}」。在上方选中它即可使用。',
   'row.oauthError': '登录失败：{message}',
   'row.oauthUnavailable': '当前版本的插件不支持扫码登录。',
+  'row.oauthCopy': '复制链接',
+  'row.oauthCopied': '已复制链接',
+  'row.oauthReopen': '重新打开页面',
+  'row.oauthDialogClose': '关闭',
   'row.transferTitle': '导出 / 导入账号',
   'row.transferHint': '用 JSON 文件在电脑之间迁移账号。文件里是账号凭据——请妥善保管。该格式与同类 WorkBuddy 凭据管理工具通用。',
   'row.transferExport': '导出账号',

@@ -281,6 +281,11 @@ export const WORKBUDDY_CARD_CSS = `
 .dsm-workbuddy-transfer-list label{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--dsw-alias-label-primary,#e8e9ed);cursor:pointer;padding:2px 0}
 .dsm-workbuddy-transfer-list input[type="checkbox"]{flex:none}
 .dsm-workbuddy-transfer input[type="file"]{font-size:12px;color:var(--dsw-alias-label-primary,#e8e9ed);margin-bottom:8px}
+/* The sign-in URL inside the OAuth dialog: long https links must wrap rather
+   than push the dialog wide — break-all, since URLs have no soft wrap points. */
+.dsm-workbuddy-oauth-url{word-break:break-all;overflow-wrap:anywhere}
+.dsm-workbuddy-oauth-url a{color:var(--dsw-alias-brand-primary,#5686fe);text-decoration:none}
+.dsm-workbuddy-oauth-url a:hover{text-decoration:underline}
 `
 /**
  * Composer credit readout styles, injected by the readout component itself.
