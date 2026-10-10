@@ -340,6 +340,81 @@ function parseVaultDocumentWithWriteTime(
   }
 }
 
+/**
+ * File name of the vault's DISMISSAL list, stored beside the vault entries.
+ *
+ * It exists because deleting a vault entry is not the same as deleting an
+ * account. `syncVault` writes every desktop sign-in it scans back into the
+ * vault — that is how a desktop account becomes selectable — so removing the
+ * vault file alone was undone by the very next scan: the row came back and the
+ * button read as broken (measured: `removeAccount` returns true, `accounts()`
+ * still lists it).
+ *
+ * The list records ids the user explicitly dismissed, so both the merge and the
+ * scan skip them. Dismissal is per ACCOUNT, not per source: hiding only the
+ * vault copy would leave the same account listed from the desktop file, which
+ * is the half-measure that produced the report.
+ */
+const VAULT_DISMISSED_FILENAME = '.dismissed.json'
+
+/** Current on-disk format of the dismissal list; readers reject others. */
+const DISMISSED_FORMAT_VERSION = 1
+
+/**
+ * The dismissal list as persisted: account ids the user removed, newest last.
+ *
+ * An ARRAY, not a map with timestamps: nothing reads when a dismissal happened,
+ * and a size cap is enough to keep the file from growing without bound across
+ * years of adding and removing accounts.
+ */
+interface DismissedDocument {
+  version: typeof DISMISSED_FORMAT_VERSION
+  accountIds: string[]
+}
+
+/**
+ * Ceiling on remembered dismissals.
+ *
+ * Generous on purpose: an entry is 24 characters, so a thousand of them is a
+ * ~28 KB file, while dropping a REAL dismissal early would resurrect the account
+ * and reintroduce the exact bug this list exists to fix. Only the oldest are
+ * dropped, and only far beyond any plausible number of removed accounts.
+ */
+const DISMISSED_LIMIT = 1000
+
+/** Read the dismissal list; an absent or unreadable file reads as empty. */
+async function readDismissed(dir: string): Promise<Set<string>> {
+  const dismissed = new Set<string>()
+  try {
+    const parsed: unknown = JSON.parse(await readFile(join(dir, VAULT_DISMISSED_FILENAME), 'utf8'))
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return dismissed
+    const document = parsed as Record<string, unknown>
+    if (document['version'] !== DISMISSED_FORMAT_VERSION) return dismissed
+    const ids = document['accountIds']
+    if (!Array.isArray(ids)) return dismissed
+    for (const id of ids) {
+      if (typeof id === 'string' && VAULT_ACCOUNT_ID_RE.test(id)) dismissed.add(id)
+    }
+  } catch {
+    // Absent (the common case) or unreadable: nothing is dismissed. A broken
+    // list must not take account discovery down — the accounts come back,
+    // which is the honest failure direction for a file that only REMOVES things.
+  }
+  return dismissed
+}
+
+/** Write the dismissal list atomically under its own lock. */
+async function writeDismissed(dir: string, dismissed: ReadonlySet<string>): Promise<void> {
+  const path = join(dir, VAULT_DISMISSED_FILENAME)
+  // Oldest-first trim: insertion order is preserved by the Set, so the first
+  // entries are the oldest dismissals.
+  const ids = [...dismissed].slice(-DISMISSED_LIMIT)
+  const document: DismissedDocument = { version: DISMISSED_FORMAT_VERSION, accountIds: ids }
+  await withFileLock(path, async () => {
+    await writeFileAtomic(path, `${JSON.stringify(document, null, 2)}\n`, { mode: 0o600, dirMode: 0o700 })
+  })
+}
+
 /** Current on-disk format of the vault; readers reject others. */
 const VAULT_FORMAT_VERSION = 1
 
@@ -1141,11 +1216,17 @@ export class WorkBuddyCredentialStore {
    */
   private async readAll(): Promise<WorkBuddyCredential[]> {
     const files = await this.candidateFiles()
+    // Dismissed accounts are filtered at BOTH ends of the merge. Here, before
+    // the desktop scan joins the map: without this the account is rebuilt into
+    // the vault by `syncVault` on every scan, so a removal never sticks (the
+    // reported "cannot delete a desktop-scanned account").
+    const dismissed = await readDismissed(this.vaultDir())
     const byId = new Map<string, WorkBuddyCredential>()
     for (const file of files) {
       const credential = await readAuthFile(file, this.resolveAtRestKey)
       if (credential === undefined || !this.matchesRegion(credential.domain)) continue
       const id = workbuddyAccountId(credential)
+      if (dismissed.has(id)) continue
       const existing = byId.get(id)
       if (existing === undefined) {
         byId.set(id, credential)
@@ -1158,6 +1239,7 @@ export class WorkBuddyCredentialStore {
     for (const own of await this.readOwns()) {
       if (!this.matchesRegion(own.domain)) continue
       const id = workbuddyAccountId(own)
+      if (dismissed.has(id)) continue
       const existing = byId.get(id)
       // The plugin's refreshed copy carries no `lastRefreshTime` of its own, so
       // it cannot be ranked by issuance time. It supersedes a desktop file only
@@ -1173,7 +1255,7 @@ export class WorkBuddyCredentialStore {
     // deduplicated, write-only-on-change), and its entries join the readable
     // set — that is how an OAuth-added account (which no desktop scan will
     // ever re-find) stays selectable across restarts.
-    await this.syncVault(byId)
+    await this.syncVault(byId, dismissed)
     return [...byId.values()]
   }
 
@@ -1186,7 +1268,7 @@ export class WorkBuddyCredentialStore {
    * mtime-stable and every sync is O(accounts) reads with at most one write
    * per CHANGED account.
    */
-  private async syncVault(scan: Map<string, WorkBuddyCredential>): Promise<void> {
+  private async syncVault(scan: Map<string, WorkBuddyCredential>, dismissed: ReadonlySet<string>): Promise<void> {
     const dir = this.vaultDir()
     let entries: Map<string, VaultEntry>
     try {
@@ -1199,6 +1281,9 @@ export class WorkBuddyCredentialStore {
     }
     let dirReady = false
     for (const [id, credential] of scan) {
+      // The write-back half of the same filter: this loop is what recreated a
+      // deleted desktop account, so a dismissal must stop it here too.
+      if (dismissed.has(id)) continue
       const incumbent = entries.get(id)
       if (incumbent !== undefined && !shouldReplaceVaultEntry(credential, incumbent)) continue
       if (!dirReady) {
@@ -1216,6 +1301,10 @@ export class WorkBuddyCredentialStore {
     for (const [id, entry] of entries) {
       if (!this.matchesRegion(entry.credential.domain)) continue
       const existing = scan.get(id)
+      // A dismissed account must not re-enter through the vault loop either:
+      // its vault file is gone, but a stale entry can outlive the delete when
+      // the write and the delete interleave.
+      if (dismissed.has(id)) continue
       // A vault entry the scan did not re-find is exactly the OAuth case (no
       // desktop file backs it), so it joins unconditionally.
       //
@@ -1456,21 +1545,52 @@ export class WorkBuddyCredentialStore {
       source: 'dsh',
       filePath: join(dir, `${id}.json`),
     })
+    // Adding an account clears any dismissal of it. Otherwise a user who removed
+    // an account and later signed into it again would watch it stay invisible:
+    // the dismissal would filter out the credential they just created, with no
+    // action left that could bring it back.
+    await this.forgetDismissal(dir, id)
     this.inflight = undefined
     return id
   }
 
   /**
-   * Remove ONE account's plugin-stored credential by id.
+   * Drop one id from the dismissal list, if present.
    *
-   * Only the VAULT entry is deleted — the desktop app's auth files are read-only
-   * to this plugin and are never touched, so an account that still exists as a
-   * desktop sign-in reappears on the next scan. That is the honest behaviour:
-   * the button means "forget what the plugin stored", not "sign the app out".
+   * Silent by design: called on the ADD paths, where a list that cannot be
+   * updated must not fail the action the user asked for. The consequence is the
+   * same as before the fix — the account stays hidden until the list is
+   * repaired — while throwing here would report a failed sign-in that succeeded.
+   */
+  private async forgetDismissal(dir: string, accountId: string): Promise<void> {
+    try {
+      const dismissed = await readDismissed(dir)
+      if (!dismissed.has(accountId)) return
+      dismissed.delete(accountId)
+      await writeDismissed(dir, dismissed)
+    } catch {
+      // See above: best-effort, never fatal.
+    }
+  }
+
+  /**
+   * Remove ONE account from this region's list, by id.
    *
-   * Returns whether a stored entry was actually removed, so the caller can
-   * distinguish "removed" from "this account only ever existed as a desktop
-   * sign-in" without a second scan.
+   * The account is DISMISSED, not merely deleted. Deleting the vault entry alone
+   * was undone by the next scan: `syncVault` writes every desktop sign-in it
+   * finds back into the vault (that is how a desktop account becomes selectable)
+   * and `readAll` merges the vault in afterwards, so a removed desktop account
+   * returned on the very next read while `removeAccount` had reported `true`.
+   * Measured before the fix: remove → `true`, then `accounts()` still lists it.
+   *
+   * The desktop app's auth files stay read-only: dismissing hides the account
+   * from this plugin without signing the app out, and that is exactly what the
+   * card says. Re-adding it (a fresh OAuth sign-in or an import) clears the
+   * dismissal, so the account is not lost to a future login.
+   *
+   * Returns whether a stored vault entry was also removed, so the caller can
+   * still tell "removed" from "only a desktop sign-in" — the dismissal happens
+   * either way, because only the user gets to decide an account is dismissed.
    */
   async removeAccount(accountId: string): Promise<boolean> {
     // The id arrives straight from a query parameter and is about to become a
@@ -1508,6 +1628,25 @@ export class WorkBuddyCredentialStore {
       // selection rather than reporting it as lost until the next restart.
       this.accountId = undefined
     }
+    // Recorded even when no vault entry was found: a desktop-only sign-in has
+    // no vault file to delete, yet it is exactly the case the user reported
+    // (the account reappeared on the next scan). The dismissal is what makes
+    // the row stay gone — see {@link VAULT_DISMISSED_FILENAME}.
+    const dir = this.vaultDir()
+    try {
+      await mkdir(dir, { recursive: true })
+      const dismissed = await readDismissed(dir)
+      if (!dismissed.has(accountId)) {
+        dismissed.add(accountId)
+        await writeDismissed(dir, dismissed)
+      }
+    } catch {
+      // A vault that cannot be written leaves the account listed after the next
+      // scan. That is the pre-fix behaviour rather than a new failure mode, and
+      // the caller still learns what happened from `removed`; failing the whole
+      // delete here would be worse, since the vault entry is already gone.
+    }
+    this.inflight = undefined
     return removed
   }
 

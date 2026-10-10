@@ -754,9 +754,13 @@ export function AccountPool(props: AccountPoolProps): ReturnType<typeof h> | nul
   }, [appendLog, onRefresh, region, t])
 
   /**
-   * Remove ONE account's plugin-stored credential from its row. The Host only
-   * ever deletes the vault entry; a desktop sign-in reappears on the next
-   * rescan, and the message below says which of the two happened.
+   * Remove ONE account from its row, via the Host.
+   *
+   * The Host dismisses the account (and deletes its vault entry when it has
+   * one), so the row stays gone across rescans. The desktop app is not signed
+   * out. The message below still distinguishes the two cases, because "there
+   * was no plugin-stored copy" is worth saying: it tells the user the account
+   * comes from the app itself rather than from an OAuth sign-in or an import.
    */
   const runRowRemove = useCallback(async (accountId: string, accountName: string): Promise<void> => {
     setRowBusyAccountId(accountId)
