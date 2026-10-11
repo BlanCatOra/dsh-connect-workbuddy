@@ -37,21 +37,13 @@ function apply(ctx: any): void {
     let settingsScope: unknown
     const forms = softGet('configForms')
     const legacy = softGet('settingsScope')
-    if (forms !== undefined) {
-      let ns = 'workbuddy'
-      try {
-        const namespaces = forms.describe().getSnapshot().view?.namespaces ?? []
-        const served = namespaces.find((entry: any) => entry.ns === 'workbuddy' || /workbuddy/i.test(entry.ns))
-        if (served !== undefined) ns = served.ns
-      } catch { /* mirror not ready: the declared id is still correct */ }
-      settingsScope = forms.get(ns)
-    } else if (legacy !== undefined) {
-      settingsScope = legacy.bind({ namespace: 'workbuddy' })
-    }
+    // Namespace candidates, in preference order (see issue #46). The declared
+    // name is LAST: it is the only spelling that is not a real Loader entry id.
+    const candidates = ['dsh-connect-workbuddy', 'include:dsh-connect-workbuddy', 'workbuddy']
 
-    const registerCard = (slotName: string, key: string): void => {
+    const registerCard = (slotName: string, key: string): (() => void) | undefined => {
       try {
-        ctx.slots.inject(slotName, () => ctx.slots.register({
+        return ctx.slots.inject(slotName, () => ctx.slots.register({
           name: slotName,
           key,
           priority: 30,
@@ -59,12 +51,39 @@ function apply(ctx: any): void {
         }, {}))
       } catch (error: unknown) {
         console.error(`[dsh-connect-workbuddy] card slot "${slotName}" failed to register (host provider unaffected):`, error)
+        return undefined
       }
     }
 
-    registerCard('plugins.bundle.config', 'dsh-connect-workbuddy')
-    registerCard('plugins.row.config', 'dsh-connect-workbuddy#dsh-connect-workbuddy')
-    registerCard('settings.plugin.item', 'workbuddy')
+    const registerAllSlots = (): Array<() => void> => [
+      registerCard('plugins.bundle.config', 'dsh-connect-workbuddy'),
+      registerCard('plugins.row.config', 'dsh-connect-workbuddy#dsh-connect-workbuddy'),
+      registerCard('settings.plugin.item', 'workbuddy'),
+    ].filter((disposer): disposer is () => void => disposer !== undefined)
+
+    let liveDisposers: Array<() => void> = []
+    if (forms !== undefined && typeof forms.whileServed === 'function') {
+      ctx.effect(() => forms.whileServed(candidates, (served: ReadonlySet<string>) => {
+        const ns = candidates.find(candidate => served.has(candidate))
+          ?? [...served].find((entry: string) => /workbuddy/i.test(entry))
+        settingsScope = ns === undefined ? undefined : forms.get(ns)
+        for (const dispose of liveDisposers) dispose()
+        liveDisposers = registerAllSlots()
+        return () => {
+          for (const dispose of liveDisposers) dispose()
+          liveDisposers = []
+        }
+      }), 'dsh-connect-workbuddy: settings namespace binding')
+    } else if (forms !== undefined) {
+      settingsScope = forms.get('workbuddy')
+      liveDisposers = registerAllSlots()
+    } else if (legacy !== undefined) {
+      settingsScope = legacy.bind({ namespace: 'workbuddy' })
+      liveDisposers = registerAllSlots()
+    } else {
+      liveDisposers = registerAllSlots()
+    }
+    void liveDisposers
     void t
   } catch (error: unknown) {
     console.error('[dsh-connect-workbuddy] client card failed to load (host provider unaffected):', error)

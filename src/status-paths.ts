@@ -1005,3 +1005,21 @@ export function unwrapVolatileDeep<T>(value: T): T {
  * fallback and must not import Node-only host code.
  */
 export const WORKBUDDY_SETTINGS_NS = 'workbuddy' as const
+
+/**
+ * Every namespace spelling the browser half follows when looking for the
+ * settings form the Host actually serves, in preference order.
+ *
+ * `describe()` keys a form by its Loader entry id, and the profile patch picks
+ * that id — so the plugin must ASK rather than assume. The observed spellings
+ * are the bare package name, the `include:`-wrapped id the live Desktop host
+ * uses, and the declared name as the last resort. `configForms.whileServed`
+ * follows all of them and re-runs when the mirror arrives, which is what keeps
+ * the binding correct on a host whose mirror populates after `apply` (the
+ * 4.3.0 readout defect, issue #46).
+ */
+export const WORKBUDDY_SETTINGS_NAMESPACE_CANDIDATES: readonly string[] = [
+  'dsh-connect-workbuddy',
+  'include:dsh-connect-workbuddy',
+  WORKBUDDY_SETTINGS_NS,
+]

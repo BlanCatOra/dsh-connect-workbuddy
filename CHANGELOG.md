@@ -1,5 +1,16 @@
 # Changelog
 
+## 4.3.1 (2026-10-11)
+
+### Fixes
+
+- **对话框积分读数现在关得掉：设置命名空间改为「跟随宿主」而非「猜名字」。**（issue #46）
+  - **现象**：设置卡片里取消勾选「在对话框显示 WBCN 积分」，勾选框随即显示为已关闭、`cordis.patch.yml` 里也确实落了 `regions.cn.showCreditsInMainUi: false`——**写入侧正常**——但切到该 provider 的会话，输入框左侧**仍然渲染** `WB CN · <余额>`。
+  - **根因（两段）**：① `src/client/index.tsx` 的命名空间解析只跑一次，且恰逢 describe 镜像未就绪（镜像由异步 `ctx.remote.settings.describe()` 填充）。旧代码把「镜像为空」当成「声明的名字一定对」，绑定 `forms.get('workbuddy')` 且此后永不复查；而 0.2.0 的设置命名空间**就是 Loader entry id**（`dsh-connect-workbuddy`），`ConfigFormController.derive()` 又是**精确匹配**，于是这个猜出来的表单永久停在 `{status:"unavailable", value:undefined}`。② `regionCreditsShownOf` 是 opt-out（`!== false` 即「显示」），`undefined` 于是被判为显示，读数照常渲染。**卡片本身显示正确**，因为 `WorkBuddyCard` 的 `creditsShownOn` 是 Host 优先——4.0.0 新增的读数 gate 没有继承这条规则。
+  - **修法一（治本）**：改用宿主现成范式 `configForms.whileServed([...])`（内部 `mirror.subscribe` + 立即 `sync`），把命名空间候选表 `WORKBUDDY_SETTINGS_NAMESPACE_CANDIDATES` 按**真实 entry id 优先、声明名最后**排序，并从 `served` 集合里现场挑选。**晚绑定必须重新注册**：渲染器按 entry 的**对象身份**永久缓存 inject 结果（`rootInjectCache` / `cachedRootInject` 里的 `if (!props) { props = runInject(...) }`），已注册 entry 不会再求值——所以旧注册被 dispose、新注册被创建。副作用是宿主不再服务该命名空间时绑定会被自动撤回。
+  - **修法二（治复发）**：让 gate 与卡片同源。Host 的 usage 载荷本就带 `showCreditsInMainUi`，现在它**压过**设置 scope（`composerCreditsRegionOf` 新增 `hostValue` 参数，`ComposerCredits` 在拿到文档后按它隐藏，并停掉 5 分钟轮询）。非布尔值（含 `error` 变体与旧文档）一律视为「宿主没说」，仍由 scope 定夺——这样镜像陈旧或未绑定时都不会再让读数复活。
+  - 回归测试 `tests/issue46-namespace-binding.spec.tsx` 14 条，覆盖：镜像后到时的重绑（原缺陷）、候选表顺序、`include:` 包裹的 entry id、声明名绝不被绑定、宿主停服时撤回、只开一个 watch；并钉住「死 scope 读作显示」这一现象本身与 Host 优先级。渲染层新增三条（Host 报关闭则隐藏、Host 报开启则显示、无该字段则沿用 scope）。**变异验证**：去掉 Host 优先级判断 → 1 红；把声明名排到候选表首位 → 3 红。
+
 ## 4.3.0 (2026-10-11)
 
 > **升级前请读这一条（行为变更）**：账号列表里的「删除」在 4.3.0 起是**「暂时隐藏」**——删掉后立即从列表消失，也不会被自动轮询带回来，但它是**可找回**的：点「重新检测账号」会把**所有**隐藏的账号一次性全部找回（不是只找回你刚删的那个），重新登录或导入同一账号也会清除该账号的隐藏记录。如果你的习惯是「删掉就永远不再看到它」，请在升级前确认这一语义可以接受。桌面 App 自身的登录**始终不被改动**——删除只是「本插件不再列出它」。上一版（4.2.0）不存在隐藏记录，因此**没有历史状态需要迁移**。

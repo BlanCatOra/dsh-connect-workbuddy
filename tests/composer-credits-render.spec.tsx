@@ -115,6 +115,43 @@ describe('ComposerCredits trigger', () => {
     expect(m.buttons()).toHaveLength(1)
     expect(m.buttons()[0]?.textContent).toContain('composer.pointsCn')
   })
+
+  it('hides the readout when the HOST reports the switch off (issue #46)', async () => {
+    // The reported symptom: unticking "显示 WBCN 积分" wrote `false` correctly
+    // and the readout stayed. The Host carries the authoritative flag on the
+    // usage document, so the component must obey it even when the settings
+    // scope it was handed is dead (bound to a namespace nothing serves).
+    stubFetch(() => ({ body: { ...usageOf('cn', 1072), showCreditsInMainUi: false } }))
+    const m = await render({
+      provider: 'workbuddy',
+      // Bound to a namespace the Host does not serve: every read is undefined,
+      // which the opt-out rule would otherwise read as "shown".
+      settingsScope: scopeOf(undefined),
+    })
+    await m.settle()
+    expect(m.text()).not.toContain('1,072')
+    expect(m.text().trim()).toBe('')
+  })
+
+  it('still renders when the Host reports the switch on', async () => {
+    // The mirror says hidden (stale), the Host says shown: the Host wins, so a
+    // user who re-enables the box sees the number without a reload.
+    stubFetch(() => ({ body: { ...usageOf('cn', 1072), showCreditsInMainUi: true } }))
+    const m = await render({
+      provider: 'workbuddy',
+      settingsScope: scopeOf({ regions: { cn: { showCreditsInMainUi: false } } }),
+    })
+    await m.settle()
+    expect(m.text()).toContain('1,072')
+  })
+
+  it('treats a Host document without the field as "did not say"', async () => {
+    // Documents written before the field existed must keep the scope's answer.
+    stubFetch(() => ({ body: usageOf('cn', 1072) }))
+    const m = await render({ provider: 'workbuddy', settingsScope: scopeOf({ regions: {} }) })
+    await m.settle()
+    expect(m.text()).toContain('1,072')
+  })
 })
 
 describe('ComposerCredits panel', () => {

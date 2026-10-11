@@ -61,10 +61,21 @@ export function selectedProviderOf(projection: ModelSelectionProjectionLike | un
  * The region's own switches are applied HERE rather than inside the component,
  * so a region that is switched off (or whose provider is off) starts no fetch
  * loop at all.
+ *
+ * `hostValue` is the Host's own `showCreditsInMainUi` answer for this region,
+ * when a usage document carrying it is already in hand. It OUTRANKS the settings
+ * scope, exactly as the card's `creditsShownOn` does and for the same measured
+ * reason: the browser's settings mirror is documented as stale for this
+ * namespace on the affected deployments, and — the shipped 4.3.0 defect (issue
+ * #46) — the scope can be bound to a namespace nothing serves, where every read
+ * is `undefined` and the opt-out rule then reads "shown" forever. The Host is
+ * the authority; the scope is the fallback for a Host line that predates the
+ * field.
  */
 export function composerCreditsRegionOf(
   projection: ModelSelectionProjectionLike | undefined,
   scope: WorkBuddyCardInjected['settingsScope'],
+  hostValue?: unknown,
 ): WorkBuddyWebRegion | undefined {
   const provider = selectedProviderOf(projection)
   const region = provider === undefined ? undefined : WORKBUDDY_COMPOSER_PROVIDERS[provider]
@@ -74,6 +85,12 @@ export function composerCreditsRegionOf(
   // (matching the card's checkbox) plus the provider gate: a region the user
   // switched off has no readable credits, so it must render nothing rather than
   // a permanently failing readout.
+  if (typeof hostValue === 'boolean') {
+    // The Host has spoken for this region: honor it and stop. Falling through to
+    // the scope here would let a stale or UNBOUND mirror overrule a live Host
+    // answer — the defect this parameter exists to close.
+    return hostValue ? region : undefined
+  }
   const value = scope === undefined ? undefined : unwrapVolatileDeep(scope.getSnapshot().value)
   if (!regionCreditsShownOf(value, region)) return undefined
   if (!regionEnabledOf(value, region)) return undefined
@@ -111,6 +128,13 @@ export function ComposerCreditsGate(props: ComposerCreditsGateProps) {
   // ONE decision, taken here: this plugin owns the provider, the region is
   // switched on, and its readout is not hidden. Otherwise nothing renders, so
   // the shared composer row is untouched and no fetch loop starts.
+  //
+  // No `hostValue` is passed at this stage: the Host's per-region answer only
+  // exists on a usage document, and reading one here would mean a fetch loop for
+  // a readout the scope might already have hidden. `ComposerCredits` re-applies
+  // the rule against the Host's answer as soon as its own read lands (see the
+  // `showCreditsInMainUi` check there), so the authority still wins — it just
+  // wins one render later, on a document we were fetching anyway.
   const region = composerCreditsRegionOf(projection, settingsScope)
   if (region === undefined) return null
 

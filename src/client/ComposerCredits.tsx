@@ -114,6 +114,18 @@ function creditsOf(usage: WorkBuddyWebUsage): number | undefined {
   return usage.credits?.total
 }
 
+/**
+ * The Host's per-region readout switch off a usage document, when it carries one.
+ *
+ * The `error` variant has no data at all, so it can only ever answer `undefined`
+ * — "the Host did not say", which leaves the settings scope in charge.
+ */
+export function hostCreditsShownOf(usage: WorkBuddyWebUsage | undefined): boolean | undefined {
+  if (usage === undefined || usage.status === 'error') return undefined
+  const value = usage.showCreditsInMainUi
+  return typeof value === 'boolean' ? value : undefined
+}
+
 /** Group the digits so a four-figure balance stays readable in a narrow row. */
 function formatCredits(value: number): string {
   return value.toLocaleString('en-US', { maximumFractionDigits: 0 })
@@ -212,8 +224,14 @@ export function ComposerCredits(props: ComposerCreditsProps) {
   // Fetch usage on mount and whenever the region changes, then keep it fresh.
   // The timer starts only after the first fetch settles, so a slow upstream
   // cannot stack overlapping reads.
+  //
+  // A region the HOST reports as hidden gets exactly one read and no timer: the
+  // read is what tells us it is hidden, and re-reading a readout that must not
+  // render would be a background poll for nothing. Should the Host flip the flag
+  // back on, the scope subscription (or a remount) brings us back.
+  const hostHidden = hostCreditsShownOf(usage) === false
   useEffect(() => {
-    if (owned === undefined) return undefined
+    if (owned === undefined || hostHidden) return undefined
     let cancelled = false
     let timer: number | undefined
     const controller = new AbortController()
@@ -226,7 +244,7 @@ export function ComposerCredits(props: ComposerCreditsProps) {
       if (timer !== undefined) window.clearInterval(timer)
       controller.abort()
     }
-  }, [owned, fetchUsage])
+  }, [owned, hostHidden, fetchUsage])
 
   // Per-account figures are read on OPEN, not on the 5-minute cycle.
   useEffect(() => {
@@ -281,6 +299,23 @@ export function ComposerCredits(props: ComposerCreditsProps) {
   // It stays because this is a public component: a caller that forgets to check
   // must not get a WorkBuddy balance rendered next to another provider's model.
   if (owned === undefined) return null
+
+  /**
+   * The Host's own answer for this region, when the document carries one.
+   *
+   * The Host is the AUTHORITY on whether this readout is wanted, exactly as the
+   * card's `creditsShownOn` treats it — and here it is also the fix for a defect
+   * shipped in 4.3.0 (issue #46): the gate's decision rests on the settings
+   * scope, which on a host whose describe mirror lands late was bound to a
+   * namespace nothing serves. Every read of that scope is then `undefined`, and
+   * the opt-out rule (`!== false`) reads "shown" forever — so unticking the
+   * checkbox wrote correctly and changed nothing on screen.
+   *
+   * Checked AFTER the fetch rather than before it because the answer only
+   * arrives with the document. The cost is one usage read for a readout the user
+   * may have hidden, against a persistent wrong number on screen.
+   */
+  if (hostCreditsShownOf(usage) === false) return null
 
   const signedIn = usage?.status === 'signed-in' ? usage : undefined
   const total = signedIn === undefined ? undefined : creditsOf(signedIn)

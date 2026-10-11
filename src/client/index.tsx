@@ -22,7 +22,7 @@
  * @module dsh-connect-workbuddy/client
  */
 
-import { WORKBUDDY_SETTINGS_NS } from '../status-paths.ts'
+import { WORKBUDDY_SETTINGS_NAMESPACE_CANDIDATES, WORKBUDDY_SETTINGS_NS } from '../status-paths.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
@@ -95,35 +95,20 @@ export function apply(ctx: WorkBuddyClientContext): void {
       | {
           describe(): { getSnapshot(): { view?: { namespaces?: { ns: string }[] } } }
           get(ns: string): WorkBuddyCardInjected['settingsScope']
+          whileServed(
+            namespaces: readonly string[],
+            register: (served: ReadonlySet<string>) => () => void,
+          ): () => void
         }
       | undefined
     // 0.1.7+ only: `configForms` is the client settings surface. The legacy
     // `settingsScope` service was removed with the 0.1.5 line (2.1.0), so
     // there is no fallback to bind.
-    if (forms !== undefined) {
-      // The namespace is the Host's Loader entry id, which the plugin cannot
-      // know in advance — the profile patch may mount it as
-      // `dsh-connect-workbuddy` or, as the live Desktop host does, as
-      // `include:dsh-connect-workbuddy`. So ASK the mirror which namespace it
-      // serves rather than assuming a name: the Host resolves a provider's
-      // namespace by exact match, so guessing wrong makes the card bind to a
-      // namespace nothing serves.
-      //
-      // The name test is a substring, not equality, because the entry id is
-      // host-chosen; the declared name stays as the fallback for a mirror that
-      // has not populated yet.
-      let ns: string = WORKBUDDY_SETTINGS_NS
-      try {
-        const namespaces = forms.describe().getSnapshot().view?.namespaces ?? []
-        const served = namespaces.find(entry => entry.ns === WORKBUDDY_SETTINGS_NS || /workbuddy/i.test(entry.ns))
-        if (served !== undefined) ns = served.ns
-      } catch { /* mirror not ready: the declared id is still correct */ }
-      settingsScope = forms.get(ns)
-    }
 
-    const registerCard = (slotName: string, key: string): void => {
+    /** Register one card slot; returns its disposer, or undefined if it failed. */
+    const registerCard = (slotName: string, key: string): (() => void) | undefined => {
       try {
-        ctx.slots.inject(slotName as never, () => (ctx.slots as unknown as {
+        return ctx.slots.inject(slotName as never, () => (ctx.slots as unknown as {
           register(
             options: { name: string; key: string; priority: number; inject: () => WorkBuddyCardInjected },
             component: unknown,
@@ -140,11 +125,9 @@ export function apply(ctx: WorkBuddyClientContext): void {
         // Isolated per slot on purpose: a failed registration must never take
         // the other slots down with it.
         console.error(`[dsh-connect-workbuddy] card slot "${slotName}" failed to register (host provider unaffected):`, error)
+        return undefined
       }
     }
-
-    registerCard('plugins.bundle.config', 'dsh-connect-workbuddy')
-    registerCard('plugins.row.config', 'dsh-connect-workbuddy#dsh-connect-workbuddy')
 
     /**
      * Credit readout in the composer tool row (`conversation.input.left`, a
@@ -164,9 +147,9 @@ export function apply(ctx: WorkBuddyClientContext): void {
      * every other provider, so nothing is drawn and no fetch loop starts while
      * another provider is selected.
      */
-    const registerComposerCredits = (): void => {
+    const registerComposerCredits = (): (() => void) | undefined => {
       try {
-        ctx.slots.inject('conversation.input.left' as never, () => (ctx.slots as unknown as {
+        return ctx.slots.inject('conversation.input.left' as never, () => (ctx.slots as unknown as {
           register(
             options: { name: string; id: string; order: number; locale: string; inject: () => WorkBuddyCardInjected },
             component: unknown,
@@ -184,10 +167,104 @@ export function apply(ctx: WorkBuddyClientContext): void {
         }, ComposerCreditsGate))
       } catch (error: unknown) {
         console.error('[dsh-connect-workbuddy] composer credits slot failed to register (host provider unaffected):', error)
+        return undefined
       }
     }
 
-    registerComposerCredits()
+    /**
+     * Every slot this plugin contributes, and how to (re)create them.
+     *
+     * Kept as one list because the binding of `settingsScope` and the slot
+     * registrations must move TOGETHER: see {@link bindSettingsScope} for why a
+     * late-arriving namespace has to produce fresh registrations rather than a
+     * mutated closure.
+     */
+    /**
+     * Disposers of the slots registered for the CURRENT namespace binding.
+     *
+     * Declared before {@link bindSettingsScope} because that function closes
+     * over it and reassigns it; the binding is only armed at the end of `apply`,
+     * so this is initialised by then either way — hoisting it keeps that
+     * ordering a non-requirement rather than a trap.
+     */
+    let liveDisposers: Array<() => void> = []
+
+    const registerAllSlots = (): Array<() => void> => [
+      registerCard('plugins.bundle.config', 'dsh-connect-workbuddy'),
+      registerCard('plugins.row.config', 'dsh-connect-workbuddy#dsh-connect-workbuddy'),
+      registerComposerCredits(),
+    ].filter((disposer): disposer is () => void => disposer !== undefined)
+
+    /**
+     * Bind `settingsScope` to whichever namespace the Host really serves, and
+     * RE-REGISTER every slot when that answer changes.
+     *
+     * Why this is not a one-shot read at startup — the shipped 4.3.0 defect
+     * (issue #46): the mirror is filled by an async `remote.settings.describe()`,
+     * so at `apply` time `view` is usually still absent. The old code read that
+     * absence as "the declared name must be right", bound
+     * `forms.get('workbuddy')`, and never looked again. `ConfigFormController.
+     * derive()` matches the namespace EXACTLY, so the guessed form stayed
+     * `unavailable` forever; the composer gate — reading only that scope —
+     * judged the opt-out switch `undefined !== false` and kept rendering the
+     * readout. Unticking the box wrote `false` correctly and changed nothing on
+     * screen.
+     *
+     * `whileServed` is the Host's own idiom for this (`mirror.subscribe` plus an
+     * immediate sync). It is strictly better than re-reading the snapshot by
+     * hand because it ALSO withdraws the binding if the Host stops serving our
+     * namespace, and it hands `register` the set of namespaces actually served
+     * — so the choice is made from live data instead of a captured guess.
+     *
+     * `register` runs on the unserved→served EDGE, not on every mirror update
+     * (see the service's `sync`), so the disposal below is not a churn loop: it
+     * clears whatever a previous edge left registered. That replacement is NOT
+     * optional, because the renderer caches each entry's inject result by object
+     * identity (`rootInjectCache` / `cachedRootInject` in
+     * `dsh-client-ui-renderer`: `if (!props) { props = runInject(...) }`), so an
+     * entry registered before the mirror landed is never re-evaluated. Late
+     * binding can therefore only work if the OLD registrations are disposed and
+     * NEW ones created — which is what this callback does.
+     */
+    const bindSettingsScope = (): void => {
+      if (forms === undefined || typeof forms.whileServed !== 'function') {
+        // No settings surface on this host (or a pre-`whileServed` line): fall
+        // back to binding the declared name once and registering once. The card
+        // then renders read-only, which is the documented degradation.
+        settingsScope = forms?.get(WORKBUDDY_SETTINGS_NS)
+        liveDisposers = registerAllSlots()
+        return
+      }
+      // Wrapped in `ctx.effect` so the watch is torn down with the plugin fiber,
+      // per the service's contract (`whileServed` registers nothing on our
+      // context by itself).
+      ctx.effect(() => forms.whileServed(
+        WORKBUDDY_SETTINGS_NAMESPACE_CANDIDATES,
+        (served) => {
+          // The mirror has spoken. The candidate list is ORDERED, so the first
+          // spelling the Host actually serves wins; the `/workbuddy/i` sweep is
+          // a last resort for an entry id naming this plugin in a way the
+          // candidate list does not anticipate (a wrapper prefix, a suffix).
+          const ns = WORKBUDDY_SETTINGS_NAMESPACE_CANDIDATES.find(candidate => served.has(candidate))
+            ?? [...served].find(entry => /workbuddy/i.test(entry))
+          settingsScope = ns === undefined ? undefined : forms.get(ns)
+          // Replace, never append: the renderer's inject cache is keyed by entry
+          // identity, so a stale registration would keep serving stale props.
+          for (const dispose of liveDisposers) {
+            try { dispose() } catch { /* already disposed by the slot service */ }
+          }
+          liveDisposers = registerAllSlots()
+          return () => {
+            for (const dispose of liveDisposers) {
+              try { dispose() } catch { /* already disposed by the slot service */ }
+            }
+            liveDisposers = []
+          }
+        },
+      ), 'dsh-connect-workbuddy: settings namespace binding')
+    }
+
+    bindSettingsScope()
   } catch (error: unknown) {
     // Degrade silently on the page: the host provider still serves models.
     // Developers see the full cause in the browser console; users see no banner.
