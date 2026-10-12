@@ -1,5 +1,34 @@
 # Changelog
 
+## 4.3.2 (2026-10-12)
+
+### Fixes
+
+- **独立 CLI 在干净安装上不再于加载期崩溃：`@deepseek-ai/dsh-atomic-write` / `@deepseek-ai/dsh-home-paths` 改为「宿主优先、按需加载」，并保留一份等价后备实现。**（issue #47）
+  - **现象（报告者 Fedora 真机，4.3.0）**：按 README 走完 `dsh plugin --profile web add dsh-connect-workbuddy`、`dsh plugin --profile dsh-tui add …` 之后，任何一条 `exec` 命令都直接崩，且**报错文件与所跑命令看起来无关**：
+    ```
+    Error [ERR_MODULE_NOT_FOUND]: Cannot find package '@deepseek-ai/dsh-atomic-write'
+    imported from /home/liguolong/.dsh/profiles/dsh-tui/node_modules/dsh-connect-workbuddy/lib/host-heartbeat-jNlsUMZO.js
+    dsh: plugin command failed; diagnostics: …/.plugin-manager/logs/operation-KO6W9v/pnpm.log
+    ```
+    **环境**：Fedora 全新机器，`nvm install 24`（Node v24.21.0）、`pnpm 12.6.0`，`npm install -g @deepseek-ai/dsh @deepseek-harness-tui/dsh-tui`。
+  - **根因（本机以 `pnpm add` 装进同构的空 profile 后逐字复现，含同一个 chunk 名 `host-heartbeat-jNlsUMZO.js`）**：两个包声明在 **peerDependencies**，而 `dsh plugin … exec` 只是在 profile 目录里跑一次 `pnpm exec`（`plugin-manager` 的 `runProfilePnpm`，`execution: 'cli'`、继承环境）——**子进程用普通 Node 解析规则，且 DSH 从不设 `NODE_PATH`（`app-boot` 明确清洗它）**。宿主内的运行期拦截层只在**已启动的 DSH 进程**里存在，`exec` 的子进程没有它；而 profile 由 `PROFILE_PNPM_WORKSPACE` 创建（`nodeLinker: hoisted` + **`autoInstallPeers: false`**），peer 也永远不会被装进去。两者相加 → 裸包名解析失败。
+  - **为什么触发点藏在 `host-heartbeat-*.js` 里**：tsdown 把 `auth` / `at-rest` / `host-heartbeat` / `pi-ai-runtime` 合并成**同一个共享 chunk**，而 `lib/bin.js` 一 import 它，`auth.ts` 顶层那句 `import … from '@deepseek-ai/dsh-atomic-write'` 就被求值——**只读的 `status` 也一样**。静态 import 在**模块求值期**抛错，任何「先 import 再 try/catch」的兜底都来不及。
+  - **为什么本机看不出来**：两处巧合同时掩盖了它——① profile 里 `dsh-connect-workbuddy` 是指向本仓库的符号链接，而仓库自身的 `node_modules` 因 `devDependencies` 恰好带有这两个 peer；② `~/.dsh/profiles/node_modules` 里还留着 **0.1.5 时代 link-backend 的投影符号链接**（现已指向不存在的 `DSH Desktop.app`，且新版本已用运行期拦截层取代该物理投影）。报告者的机器两处都没有。
+  - **修法**：新增 `src/host-peers.ts`。`writeFileAtomic` / `withFileLock` **宿主优先**——用 `import()` 在**调用时**解析 `@deepseek-ai/dsh-atomic-write`，宿主在场就用宿主那份（保持与宿主共享同一套跨进程写协议）；解析不到才启用后备实现。`resolveDshHome` 则改为**纯本地同步实现**：上游该函数是不做任何 I/O 的纯函数，而本插件**每一处调用都不传参**，零参形态只取决于 `$DSH_HOME`（非空白）否则 `~/.dsh`，逐字转写即等价——若改成「宿主优先」反而会把一批同步调用点（凭据路径、心跳路径）逼成异步，付出真实复杂度换取零行为差异。
+  - **后备实现转写而非重造**：锁文件命名（`<file>.lock`）、`wx` 独占创建、`EPERM` 需 `lstat` 复核才算争用、Windows 瞬时错误集合（`EACCES`/`EBUSY`/`EPERM`）与重试节奏（initial 20ms / max 200ms / limit 8，即 `docs/WINDOWS.md` §3 末已更正的 ≈1100ms 预算）全部照抄上游。两份实现若预算不同，同一文件上「谁先拿到锁」将取决于**进程身份**而不是锁本身。`isTransientWindowsRenameError` 同样在 `process.platform !== 'win32'` 时短路，平台语义与 §1-4 一致。
+  - **`doctor` 可见**（#26 的 `piAiRuntime` 同款做法）：新增 `hostPeers.atomicWrite`（`host` | `fallback`）与说明行，`--json` 的 `schemaVersion` 3 → 4。**两种状态都以真实输出核对过**：干净目录（无任何 `@deepseek-ai/*`）→ `fallback`，且 `status`/`doctor` 均正常退出；仓库检出（peer 齐全）→ `host`。
+  - **本机实测（无 peer 的空目录，即报告者形态）**：修复前 `node …/lib/bin.js status` → 与 issue 逐字一致的 `ERR_MODULE_NOT_FOUND`；修复后 `status`、`doctor`、`doctor --json` 全部 0 退出并输出真实账号数据。
+  - **守卫（两层，均做过变异验证）**：`tests/host-peers.spec.ts` 共 9 例——① **扫描构建产物**：从 `lib/bin.js` 沿相对 import 走完整个依赖图，出现任何裸包名即红；对**真实 4.3.0 产物**跑它是**红的**，且逐条点出 `lib/host-heartbeat-jNlsUMZO.js` 与 issue 报告里一模一样的两个包名（含 chunk 名），恢复到修复版即绿。② **源码层同规则**（不依赖构建，`pnpm test` 单独跑也能拦住）；把 `src/auth.ts` 改回静态 import → 立即红。③ 反面对照：钉住 `lib/index.js`（宿主半边）**必须**继续把 `@deepseek-ai/dsh-llm` / `@deepseek-ai/schemastery` 留作外部依赖——否则有人可能用「两边都内联」的方式把它「修」掉。④ 后备实现的行为：原子写往返并建父目录、无残留临时文件、写锁互斥（断言**互斥**而非**谁先拿到**——两者同时发起时顺序是调度细节，被断言的是绝不交错）、异常路径也释放锁、`DSH_HOME` 优先级。
+  - **`lib/index.js` 的外部依赖清单未变**（`dsh-llm`、`dsh-llm-pi-ai`、`schemastery`、`pi-ai` 仍为外部），宿主半边的接驳方式一行未改。
+
+#### Docs
+
+- `README.md` / `README.en.md`：命令行一节新增 issue #47 的成因说明（peer + `autoInstallPeers: false` + `exec` 子进程无拦截层 + chunk 合并导致报错文件名看似无关），并说明 4.3.2 起的解析顺序与 `doctor` 的 `Atomic writes:` 行；「已知限制」新增对应条目。
+- `docs/WINDOWS.md` §3 末新增「同一预算的第二份实现」，登记 `src/host-peers.ts` 与上游共用同一锁协议与同一重试预算；§4 检查清单新增一条（改后备实现时必须与上游的锁命名、Windows 瞬时错误集合、重试节奏保持一致）。
+- `THIRD_PARTY_NOTICES.md` §四：原文写「唯一一处代码移植：`src/dsml-recovery.ts`」，本次后备实现属于**行为契约转写**（来自排除项中的 `@deepseek-ai/*` 通用平台依赖），已就地补记，避免该句因本次改动而失实。
+- `tsdown.config.ts` 的 `neverBundle` 上方补注释：说明**宿主包保持外部依赖是刻意的**，以及 `bin` 与 `index` 共用 chunk 这一事实对新增代码的约束（`bin.ts` 可达的代码必须用调用期 `import()`）。
+
 ## 4.3.1 (2026-10-11)
 
 ### Fixes

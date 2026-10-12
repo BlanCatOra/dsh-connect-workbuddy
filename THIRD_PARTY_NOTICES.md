@@ -49,7 +49,8 @@
 ## 四、本项目的使用方式
 
 - **借鉴设计思路 + 独立实现**：关键模块均为本项目独立编写，并在各源文件头部注释中标注所参考的具体项目与模式。
-- **唯一一处代码移植**：`src/dsml-recovery.ts` 是 [`hawklithm/workbuddy2api`](https://github.com/hawklithm/workbuddy2api) 的 `src/codebuddy_proxy/dsml_parser.py`（MIT，Copyright (c) 2026 Mayer）的 **TypeScript 移植**，不是思路参照。该文件的头部注释逐条列出了三处**有意偏离**（参考实现里重复定义的 `find_invoke_blocks`、其流式注入与自身解析器输出形状不一致、以及它没有的两道闸）。按 MIT 条款，本项目保留其版权与许可声明，并在上表与本条中同时标注。
+- **唯一一处跨项目代码移植**：`src/dsml-recovery.ts` 是 [`hawklithm/workbuddy2api`](https://github.com/hawklithm/workbuddy2api) 的 `src/codebuddy_proxy/dsml_parser.py`（MIT，Copyright (c) 2026 Mayer）的 **TypeScript 移植**，不是思路参照。该文件的头部注释逐条列出了三处**有意偏离**（参考实现里重复定义的 `find_invoke_blocks`、其流式注入与自身解析器输出形状不一致、以及它没有的两道闸）。按 MIT 条款，本项目保留其版权与许可声明，并在上表与本条中同时标注。
+- **`src/host-peers.ts` 的例外说明（issue #47）**：该文件里的 `writeFileAtomic` / `withFileLock` 两个后备实现**转写自 `@deepseek-ai/dsh-atomic-write`，`resolveDshHome` 转写自 `@deepseek-ai/dsh-home-paths`**——参数语义、锁文件命名（`<file>.lock`）、Windows 瞬时错误集合与重试节奏都照抄，只有这样才能与宿主进程共用同一个跨进程写协议。这两者属于上文排除项中的 **`@deepseek-ai/*` 通用平台依赖**（其版权与许可随各自 npm 包携带），且均为零依赖、无 cordis、无进程级状态的纯工具函数。此处转写的是**行为契约**而非源文件；之所以不直接 import，见该文件头部与 `tests/host-peers.spec.ts`（静态 import 会让独立 CLI 在缺 peer 的机器上于加载期崩溃）。
 - **除此之外不复制源码**：其余各参考项目均只借鉴设计思路，未复制、修改或再分发其源文件。
 - **版权声明保留**：所有参考项目的版权归各自作者所有。
 - **后续引入依赖时**：引入任何新的 WorkBuddy 相关外部依赖、或复用其他项目代码时，必须同步更新本文件，并遵守对应许可证的署名与声明要求。

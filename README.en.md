@@ -215,6 +215,25 @@ dsh plugin --profile <web|desktop|dsh-tui> exec dsh-connect-workbuddy logout   #
 
 `status` and `doctor` accept `--json` for machine-readable output.
 
+> **Why these three commands work on a machine with nothing installed (issue #47)**
+>
+> The plugin declares `@deepseek-ai/dsh-atomic-write`, `@deepseek-ai/dsh-home-paths`, and the rest of the DSH packages as **peers**: the host supplies them and the plugin ships no copy. That works inside a **booted DSH process** (the host's runtime interception layer resolves those names against the installation), but `dsh plugin … exec` is not that — it runs one `pnpm exec` in the profile directory, and that child uses **stock Node resolution**. The profile is created with `autoInstallPeers: false`, so the peers are never installed there and the two packages cannot be found.
+>
+> Up to 4.3.1 this was a **load-time** crash (`ERR_MODULE_NOT_FOUND`), naming a file that looked unrelated to the command:
+>
+> ```
+> Error [ERR_MODULE_NOT_FOUND]: Cannot find package '@deepseek-ai/dsh-atomic-write'
+> imported from …/profiles/dsh-tui/node_modules/dsh-connect-workbuddy/lib/host-heartbeat-*.js
+> ```
+>
+> The reason is bundling: `auth`, `host-heartbeat`, `at-rest`, and `pi-ai-runtime` are emitted as **one shared chunk**, so the moment `lib/bin.js` imported it, the top-level import in `auth.ts` was evaluated — even for a read-only `status`. **From 4.3.2** those two packages are host-first and loaded on demand: the host's copy still wins where the host is present (keeping one cross-process write protocol shared with the host), and a small built-in implementation takes over where it is not. `exec` therefore works on a clean machine, and `doctor` prints which one is in use:
+>
+> ```
+> Atomic writes: built-in copy (host peer not resolvable here; normal outside a booted DSH)
+> ```
+>
+> Inside the repository checkout (peers present) it reports `host-provided (@deepseek-ai/dsh-atomic-write)` instead. The guard lives in `tests/host-peers.spec.ts`: it scans the **built output** and fails as soon as `lib/bin.js`'s dependency graph contains a bare package name again.
+
 ## Development
 
 ```sh
@@ -253,6 +272,7 @@ Marketplace screenshots and GitHub README badges are two separate mechanisms:
   - Users upgrading from before 2.0.0 may still carry the old top-level `accountId` (the migration source). It applies only to its own region and **stops applying once that region is explicitly cleared (`accounts.<region> = ""`)** — otherwise the account you cleared would be silently restored at the next startup. The card shows whether a region is "using the saved account" or "following the app's current sign-in": the restored default is usually the very account you just cleared, so without that line there is no way to tell a successful clear from a no-op.
 - **On Windows, an account change may fail to save while the profile's `cordis.patch.yml` is held open.** DSH updates that file by writing a temp file and replacing the target; an antivirus scanner, a sync client (OneDrive), or an open editor can lock it briefly, and once the replacement retries are exhausted the failed write does **not** make `set()` reject. The plugin therefore reads the value back after writing: it shows "cleared" **only once the write is confirmed on disk**, and on failure it reports the error and keeps your previous choice (never a false confirmation that the old selection silently contradicts). Close whatever holds the file and retry.
 - Windows and Linux credential paths are derived from platform conventions. On a real Windows 11 machine, `%LOCALAPPDATA%\CodeBuddyExtension\Data\Public\auth` and `%LOCALAPPDATA%\Programs\WorkBuddy\WorkBuddy.exe` **did resolve**, but **the remaining candidates and the Linux paths are still not verified on real hardware**; set `WORKBUDDY_AUTH_FILE` if yours lives elsewhere.
+- **The standalone CLI (`dsh plugin … exec`) does not carry the host-supplied peer packages**, so outside the host the plugin falls back to a built-in atomic-write implementation (`src/host-peers.ts`). It transcribes the host's behavioural contract (the `<file>.lock` naming, the Windows `EACCES`/`EBUSY`/`EPERM` retries and their cadence) and is used **only** when those two packages cannot be resolved — inside the host, and in this checkout, the host's or the dependency's copy is still used. `doctor` reports which one is in effect. See the issue #47 note under [Command line](#command-line).
 - **Encrypted credentials require the desktop app to be present.** Newer desktop builds (**from 5.6.0, on macOS as well as Windows**) encrypt the token fields in the auth file, and the plugin needs that app's own native binding to obtain the field key. If the app is not installed, was uninstalled, or lives outside the probed paths (on Windows the install registration is consulted automatically, so a non-default install is found without configuration; set `WORKBUDDY_APP_EXECUTABLE` if that misses too), an encrypted file cannot be read — the account then shows as signed out, and the plugin **never** degrades into emitting a truncated token. `doctor` reports whether this capability is available. The key is a build-time constant that may rotate with app releases; the plugin fetches it from the local app each run and caches nothing on disk, so an app upgrade needs no plugin upgrade.
   - **The executable is located from the bundle's own declaration, not guessed from the app name.** The WorkBuddy macOS bundles declare `CFBundleExecutable` as `Electron` (not `WorkBuddy`), so the plugin reads each bundle's `Info.plist` to learn the binary's name. Both the domestic `WorkBuddy.app` and the international `WorkBuddy AI.app` are candidates, and an app filed into a subdirectory of an applications folder (e.g. `/Applications/IDE/WorkBuddy.app`) is found by a one-level scan that confirms each candidate's bundle identifier before use — so a different Electron app can never be launched by mistake.
   - **"Signed out" and "your sign-in cannot be read" are reported separately.** When an encrypted file cannot be read, the advice is to install the desktop app or point `WORKBUDDY_APP_EXECUTABLE` at it — **not** to sign in again, which cannot help: the credential is fine, the key is what is missing.

@@ -225,6 +225,25 @@ dsh plugin --profile <web|desktop|dsh-tui> exec dsh-connect-workbuddy logout   #
 
 `status` 与 `doctor` 支持 `--json` 输出机器可读格式。
 
+> **为什么这三条命令能在「什么都没装」的机器上跑（issue #47）**
+>
+> 该插件把 `@deepseek-ai/dsh-atomic-write`、`@deepseek-ai/dsh-home-paths` 等一整套 DSH 包声明为 **peer**：由宿主提供，插件不自己带一份。这在**已启动的 DSH 进程内**工作正常（宿主有运行期拦截层负责按宿主安装位置解析这些名字），但 `dsh plugin … exec` 不是那种环境——它就是在 profile 目录里跑一次 `pnpm exec`，子进程用**普通 Node 解析规则**，而 profile 是按 `autoInstallPeers: false` 建的，peer 根本不会装进去。于是这两个包解析不到。
+>
+> 4.3.1 及更早版本会因此在**加载期**直接崩溃（`ERR_MODULE_NOT_FOUND`），且报错文件看起来和命令无关：
+>
+> ```
+> Error [ERR_MODULE_NOT_FOUND]: Cannot find package '@deepseek-ai/dsh-atomic-write'
+> imported from …/profiles/dsh-tui/node_modules/dsh-connect-workbuddy/lib/host-heartbeat-*.js
+> ```
+>
+> 原因是打包把 `auth` / `host-heartbeat` / `at-rest` / `pi-ai-runtime` 合并进了**同一个 chunk**，`lib/bin.js` 一 import 它，`auth.ts` 里那句顶层 import 就被求值了——连只读的 `status` 也一样。**4.3.2 起**这两个包改为「宿主优先、按需加载」：宿主在场时仍用宿主的那份（保持与宿主共享同一套跨进程写协议），不在场时回落到插件自带的小实现。所以现在 `exec` 在干净机器上可用，`doctor` 也会把当前用的是哪一份打印出来：
+>
+> ```
+> Atomic writes: built-in copy (host peer not resolvable here; normal outside a booted DSH)
+> ```
+>
+> 在仓库里跑（peer 齐全）则显示 `host-provided (@deepseek-ai/dsh-atomic-write)`。这条守卫写在 `tests/host-peers.spec.ts`：它直接扫描**构建产物**，一旦 `lib/bin.js` 的依赖图里再出现裸包名就变红。
+
 ## 开发
 
 ```sh
@@ -263,6 +282,7 @@ dsh plugin --profile desktop add /Users/dmh2002/DshProject/dsh-connect-workbuddy
   - 从 2.0.0 之前的版本升级而来的用户，设置里可能仍留有旧版的顶层 `accountId`（迁移来源）。它只作用于其所属区域，且**该区域被显式清除（`accounts.<区域> = ""`）后即不再生效**——否则清除掉的账号会在下次启动时被静默恢复。卡片会显示每个区域当前是「使用保存的账号」还是「跟随 App 当前登录」：清除后回到的默认账号往往与刚清掉的账号是同一个，没有这行提示就无法分辨清除是否生效。
 - **Windows：profile 的配置文件 `cordis.patch.yml` 被占用时，账号改动可能无法保存**。DSH 用「写临时文件 + 覆盖替换」的方式更新该文件，而杀毒软件、OneDrive 等同步盘或正在打开该文件的编辑器会短暂锁住它；重试耗尽后，写入失败**不会**让 `set()` 报错。插件因此会在写入后回读校验：**确认落盘才显示「已清除」**，失败则给出明确错误并保留原来的选择（不会显示一个旧选择默默反驳的假确认）。遇到该提示时，关闭占用该文件的程序后重试即可。
 - Windows / Linux 的凭据默认路径按平台约定推导。已在真实 Windows 11 上确认 `%LOCALAPPDATA%\CodeBuddyExtension\Data\Public\auth` 与 `%LOCALAPPDATA%\Programs\WorkBuddy\WorkBuddy.exe` 命中，**其余候选与 Linux 路径仍未经真机验证**；必要时可通过环境变量 `WORKBUDDY_AUTH_FILE` 指定实际位置。
+- **独立 CLI（`dsh plugin … exec`）不带宿主提供的 peer 包**，因此插件在**宿主之外**运行时会回落到自带的原子写实现（`src/host-peers.ts`）。它转写了宿主的行为契约（锁文件命名 `<file>.lock`、Windows 的 `EACCES`/`EBUSY`/`EPERM` 重试与节奏），并且只在这两个包解析不到时才启用——宿主内、以及仓库检出里都仍用宿主/依赖里的那份。`doctor` 会报告当前用的是哪一份。详见[命令行](#命令行)一节的 issue #47 说明。
 - **加密凭据依赖桌面 App 在场**：新版桌面端（**5.6.0 起，macOS 与 Windows 同样如此**）加密了 auth 文件里的 token 字段，插件需要调用该 App 自身的原生绑定才能取回字段密钥。因此 App 若未安装、被卸载，或安装在探测路径之外（**Windows 上会自动回退查安装注册表**，仍找不到时用 `WORKBUDDY_APP_EXECUTABLE` 指定），加密文件就读不出来——此时账号会显示为未登录，而**不会**退化成读出一个残缺的 token。`doctor` 会报告这项能力是否可用。该密钥是构建期常量，随 App 版本可能轮换；插件每次向本机 App 现取，不缓存到磁盘，所以 App 升级后无需升级插件。
   - **App 可执行文件按 bundle 自身声明定位，不按 App 名猜**：WorkBuddy 的 macOS bundle 里 `CFBundleExecutable` 是 `Electron`（不是 `WorkBuddy`），因此插件读取 bundle 的 `Info.plist` 来决定二进制名。国内版 `WorkBuddy.app` 与国际版 `WorkBuddy AI.app` 都在候选内；App 被归入 `/Applications` 子目录（如 `/Applications/IDE/WorkBuddy.app`）时，插件还会向下扫一层并用 bundle id 确认身份后才使用——**不会**因为同名的其他 Electron 应用而误启动它。
   - **「未登录」与「登录信息读不出来」是两件事**：加密文件读不出时，插件给出的建议是「安装桌面 App / 用 `WORKBUDDY_APP_EXECUTABLE` 指定其位置」，而**不是**「重新登录一次」——后者对这种情况无效（凭据本身是好的，缺的是密钥）。
