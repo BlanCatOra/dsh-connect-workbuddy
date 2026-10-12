@@ -83,10 +83,26 @@ export interface WorkBuddyUpstreamModel {
   supportsToolCall?: boolean
 }
 
-/** One billing package and its remaining credit, already aggregated. */
 /** One billing package as the upstream returns it, dates already parsed. */
 export interface WorkBuddyCreditPackage {
   packageName: string
+  /**
+   * Remaining credit, always read from `CapacityRemain` (issue #48).
+   *
+   * The upstream reports a monthly resource (`CapacityType 4`) with TWO
+   * capacity families, and they answer different questions:
+   *
+   * - `CapacityRemain` / `CapacitySize` / `CapacityUsed` — the capacity POOL.
+   * - `CycleCapacityRemain` / `CycleCapacitySize` / `CycleCapacityUsed` — the
+   *   CURRENT BILLING CYCLE.
+   *
+   * "How much credit do I have" is the pool, so that is what this field
+   * carries. Reading `CycleCapacityRemain` here was the defect: on three real
+   * global accounts the upstream returned `CapacityRemain=100` together with
+   * `CycleCapacityRemain=0` and `CycleCapacityUsed=100` inside an UNFINISHED
+   * cycle (`CycleEndTime` days out, `Status=0`), so the plugin reported 0
+   * credits for accounts that were not exhausted at all.
+   */
   remain: number
   size: number
   /** CapacityType 4: refreshed every cycle and never expires. */
@@ -95,6 +111,16 @@ export interface WorkBuddyCreditPackage {
   refreshAtMs?: number
   /** One-off expiry; the package disappears from the account at this time. */
   expiresAtMs?: number
+  /**
+   * Remaining credit in the CURRENT cycle; only on monthly packages.
+   *
+   * Kept beside {@link remain} because it answers the one question the pool
+   * total cannot: whether THIS cycle's allowance is spent. That is what makes
+   * `refreshAtMs` meaningful — "you are out until the cycle resets" is a
+   * different statement from "you are out of credit", and only the cycle
+   * figure can tell them apart.
+   */
+  cycleRemain?: number
 }
 
 /** Aggregated credit answer for one credential. */
@@ -1228,8 +1254,24 @@ export class WorkBuddyUpstreamClient {
       // deduction-based gift (CapacityRemain drains to 0, ExpiredTime set).
       // CycleEndTime exists on both, so it alone cannot tell them apart.
       const monthly = numberField('CapacityType') === 4
-      const size = monthly ? numberField('CycleCapacitySize') : numberField('CapacitySize')
-      const remain = monthly ? numberField('CycleCapacityRemain') : numberField('CapacityRemain')
+      // The BALANCE is always the capacity pool, for BOTH kinds (issue #48).
+      // A monthly resource reports the pool and the current cycle as two
+      // separate capacity families, and only the pool answers "how much do I
+      // have left" — see WorkBuddyCreditPackage.remain. Reading the cycle
+      // figure here reported 0 for three real global accounts whose pool held
+      // 100 and whose cycle had not even ended.
+      //
+      // The SIZE is the only field the two kinds name differently:
+      // `CapacitySize` exists on gifts, and on a real global monthly resource
+      // BOTH spellings were present and equal (100). `CapacitySize` is
+      // therefore read unconditionally, with the cycle spelling kept as a
+      // fallback for a monthly resource that omits it.
+      const size = numberField('CapacitySize') || numberField('CycleCapacitySize')
+      const remain = numberField('CapacityRemain')
+      // The cycle figure is still read for monthly resources: it answers the
+      // different question "is THIS cycle's allowance spent", which is the only
+      // thing that makes the refresh hint truthful.
+      const cycleRemain = monthly ? numberField('CycleCapacityRemain') : undefined
       const cappedRemain = remain < 0 ? 0 : remain
       // For the monthly resource the cycle end is the refresh point; display the
       // next cycle's start (end + 1s) since "refreshes on 08/31 23:59:59" reads
@@ -1256,6 +1298,7 @@ export class WorkBuddyUpstreamClient {
         remain: cappedRemain,
         size,
         monthly,
+        ...cycleRemain === undefined ? {} : { cycleRemain: Math.max(0, cycleRemain) },
         ...refreshAtMs === undefined ? {} : { refreshAtMs },
         ...expiresAtMs === undefined ? {} : { expiresAtMs },
       })

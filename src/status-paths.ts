@@ -408,10 +408,18 @@ export function nextRegionCreditsShown(
 /** One credit package as the upstream returns it, node-free. */
 export interface WorkBuddyWebCreditPackage {
   packageName: string
+  /** Capacity-pool balance (`CapacityRemain`); see the host-side type for issue #48. */
   remain: number
   size: number
   /** CapacityType 4: refreshed every cycle and never expires. */
   monthly: boolean
+  /**
+   * Balance of the CURRENT cycle (`CycleCapacityRemain`); only on monthly
+   * packages. `0` on a live package means this cycle's allowance is spent,
+   * which is what {@link cycleRefreshMs} is telling the user to wait for — and
+   * is deliberately NOT the same as {@link remain} being 0 (issue #48).
+   */
+  cycleRemain?: number
   /** Next cycle start (the monthly refresh point) in ms; only on monthly packages. */
   cycleRefreshMs?: number
   /** One-off expiry in ms; the package disappears from the account then. */

@@ -455,6 +455,7 @@ function toCredits(answer: WorkBuddyCredits): WorkBuddyWebCredits {
       remain: pack.remain,
       size: pack.size,
       monthly: pack.monthly,
+      ...pack.cycleRemain === undefined ? {} : { cycleRemain: pack.cycleRemain },
       ...pack.refreshAtMs === undefined ? {} : { cycleRefreshMs: pack.refreshAtMs },
       ...pack.expiresAtMs === undefined ? {} : { expiresAtMs: pack.expiresAtMs },
     })),

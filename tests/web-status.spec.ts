@@ -78,7 +78,7 @@ function deps(overrides: Partial<WorkBuddyStatusRouteOptions> = {}): WorkBuddySt
       fetchCredits: async () => ({
         total: 1875,
         packages: [
-          { packageName: 'CodeBuddy个人体验版', remain: 41, size: 500, monthly: true, refreshAtMs: 1_799_999_999_000 },
+          { packageName: 'CodeBuddy个人体验版', remain: 41, size: 500, monthly: true, cycleRemain: 0, refreshAtMs: 1_799_999_999_000 },
           { packageName: 'CodeBuddy个人版国内运营裂变包', remain: 1806, size: 2000, monthly: false, expiresAtMs: 1_800_000_000_000 },
         ],
         expiringSoon: 75,
@@ -347,10 +347,19 @@ describe('workBuddyWebStatus', () => {
       expiringSoon: 75,
       nearestExpiryMs: 1_800_000_000_000,
       packages: [
-        { packageName: 'CodeBuddy个人体验版', monthly: true, cycleRefreshMs: 1_799_999_999_000 },
+        { packageName: 'CodeBuddy个人体验版', monthly: true, cycleRemain: 0, cycleRefreshMs: 1_799_999_999_000 },
         { packageName: 'CodeBuddy个人版国内运营裂变包', monthly: false, expiresAtMs: 1_800_000_000_000 },
       ],
     })
+    // The pool balance and the cycle balance are separate figures that can
+    // DISAGREE (issue #48: pool held 41 while the cycle held 0), so both must
+    // survive the host→client hop. Asserted by identity rather than only via
+    // `toMatchObject` above, which would not notice a dropped optional field.
+    const monthly = status.credits?.packages[0]
+    expect(monthly?.remain).toBe(41)
+    expect(monthly?.cycleRemain).toBe(0)
+    // The gift carries no cycle figure at all — absent, not zero.
+    expect('cycleRemain' in (status.credits?.packages[1] as object)).toBe(false)
   })
 
   it('degrades a credit failure to creditsError instead of failing the document', async () => {
