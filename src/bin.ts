@@ -33,10 +33,18 @@ import { FALLBACK_WORKBUDDY_MODELS, FALLBACK_WORKBUDDY_MODELS_GLOBAL } from './c
 import { WORKBUDDY_CONNECT_VERSION } from './version.ts'
 import { isHeartbeatProcessAlive, readHostHeartbeat, workbuddyHostHeartbeatPath } from './host-heartbeat.ts'
 import { piAiRuntimeInfo } from './pi-ai-runtime.ts'
+import { hostPeersInfo } from './host-peers.ts'
 
 type Action = 'doctor' | 'logout' | 'status'
 
-const JSON_SCHEMA_VERSION = 3
+/**
+ * Version of the `doctor --json` document.
+ *
+ * 3 → 4: added `hostPeers` (issue #47). Consumers that switch on the version
+ * see the field appear rather than having to guess whether its absence means
+ * "old build" or "no peer".
+ */
+const JSON_SCHEMA_VERSION = 4
 
 /** Both regions, in reporting order. */
 const REGIONS: readonly WorkBuddyRegion[] = ['cn', 'global']
@@ -112,6 +120,17 @@ async function doctor(jsonOutput: boolean): Promise<number> {
    * or reports key material.
    */
   const piAi = piAiRuntimeInfo()
+  /**
+   * Which atomic-write implementation this process would use (issue #47).
+   *
+   * The mirror of the `piAiRuntime` block below, for the same reason: the
+   * plugin declares `@deepseek-ai/dsh-atomic-write` as a PEER, so inside a
+   * booted host the host's copy is borrowed, while under `dsh plugin …
+   * exec` the child resolves with stock Node rules and the peer is absent. A
+   * missing peer used to be a load-time crash; it is now reported here so a
+   * user can tell the two states apart without reading a stack trace.
+   */
+  const hostPeers = await hostPeersInfo()
   const report = {
     schemaVersion: JSON_SCHEMA_VERSION,
     package: 'dsh-connect-workbuddy',
@@ -127,6 +146,12 @@ async function doctor(jsonOutput: boolean): Promise<number> {
         : piAi.resolvedLocally
           ? 'passes provider contexts through unchanged'
           : 'passes provider contexts through unchanged (pi-ai comes from the DSH host; 0.2.0+ ships 0.87.1)',
+    },
+    hostPeers: {
+      atomicWrite: hostPeers.atomicWrite,
+      behaviour: hostPeers.atomicWrite === 'host'
+        ? 'using @deepseek-ai/dsh-atomic-write from the DSH host'
+        : 'using the built-in copy: the host peer did not resolve here, which is the normal state outside a booted DSH (e.g. `dsh plugin … exec`)',
     },
     desktopAuthFile: {
       path: anyStore.desktopAuthPath() ?? '(no platform default; set WORKBUDDY_AUTH_FILE)',
@@ -194,6 +219,7 @@ async function doctor(jsonOutput: boolean): Promise<number> {
       ...piAi.resolvedLocally
         ? [`pi-ai runtime: ${piAi.generation}${piAi.version === undefined ? '' : ` ${piAi.version}`} (${piAi.resolvedFrom}) — ${report.piAiRuntime.adapterBehaviour}`]
         : [`pi-ai runtime: ${piAi.generation}, host-provided (no local copy; DSH 0.2.0+ ships 0.87.1) — passes provider contexts through unchanged`],
+      `Atomic writes: ${hostPeers.atomicWrite === 'host' ? 'host-provided (@deepseek-ai/dsh-atomic-write)' : 'built-in copy (host peer not resolvable here; normal outside a booted DSH)'}`,
       `Desktop auth file: ${report.desktopAuthFile.present ? 'present' : 'missing'} (${report.desktopAuthFile.path})`,
       `Encrypted-credential support: ${report.atRestDecryption.available ? 'available' : 'unavailable'} (${report.atRestDecryption.appExecutable}${report.atRestDecryption.appExecutableSource === undefined ? '' : `, via ${report.atRestDecryption.appExecutableSource}`})`,
       `Host bundle: ${hostAlive ? `running (pid ${heartbeat!.pid})` : heartbeat !== undefined ? 'stale heartbeat (process exited)' : 'not started'}`,

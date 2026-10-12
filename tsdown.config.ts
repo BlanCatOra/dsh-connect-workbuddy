@@ -62,6 +62,21 @@ export default [
     clean: true,
     define: VERSION_DEFINE,
     deps: {
+      /**
+       * Every host package stays external so the plugin borrows the DSH
+       * installation's copies instead of carrying its own.
+       *
+       * The `bin` entry shares one chunk with `index`, so keep the HOST-PEER
+       * rule in mind when moving code between entries (issue #47): a static
+       * import of an entry from this list is fine for `index` (always loaded
+       * inside a booted host, where the app-boot interception layer supplies
+       * the package) but is a LOAD-TIME crash for `bin`, which `dsh plugin …
+       * exec` runs under stock Node resolution in a profile whose peers are
+       * never installed (`autoInstallPeers: false`). Code reachable from
+       * `bin.ts` must therefore import peers through `import()` at call time —
+       * see `src/host-peers.ts`. `tests/host-peers.spec.ts` walks the BUILT
+       * output and fails if `lib/bin.js` ever reaches a bare specifier again.
+       */
       neverBundle: [
         '@earendil-works/pi-ai',
         '@deepseek-ai/schemastery',

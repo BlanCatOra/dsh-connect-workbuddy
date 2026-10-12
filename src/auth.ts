@@ -29,8 +29,10 @@ import { mkdir, readFile, readdir, rm, stat } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { withFileLock, writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
-import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
+// Host-first with a local fallback: a static peer import here is a load-time
+// crash in the standalone CLI, because tsdown shares this module with
+// `bin.ts`'s chunk. See `src/host-peers.ts` and issue #47.
+import { resolveDshHome, withFileLock, writeFileAtomic } from './host-peers.ts'
 import { isEncryptedFieldWrapper, openEncryptedField, readAtRestKey, WORKBUDDY_APP_EXECUTABLE_ENV } from './at-rest.ts'
 import { regionOf, type WorkBuddyRefreshOutcome, type WorkBuddyRegion } from './upstream.ts'
 

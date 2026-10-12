@@ -15,7 +15,7 @@
 import { execFileSync } from 'node:child_process'
 import { readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
+import { resolveDshHome } from './host-peers.ts'
 import { WORKBUDDY_CONNECT_VERSION } from './version.ts'
 
 /** Basename of the host heartbeat file inside the Harness home. */

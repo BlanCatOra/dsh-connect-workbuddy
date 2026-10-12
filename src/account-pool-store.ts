@@ -22,8 +22,8 @@
 
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { withFileLock, writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
-import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
+// Host-first with a local fallback; see `src/host-peers.ts` and issue #47.
+import { resolveDshHome, withFileLock, writeFileAtomic } from './host-peers.ts'
 import type { WorkBuddyPoolProbe, WorkBuddyPoolProbeSource } from './account-pool.ts'
 import type { WorkBuddyRegion } from './upstream.ts'
 
