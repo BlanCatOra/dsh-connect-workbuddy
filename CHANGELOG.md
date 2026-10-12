@@ -1,5 +1,19 @@
 # Changelog
 
+## 4.3.3 (2026-10-12)
+
+### Fixes
+
+- **月度套餐的余额改用容量池（`CapacityRemain`），不再用本周期余额（`CycleCapacityRemain`）——国际版账号不再被误报「积分耗尽」为 0。**（issue #48）
+  - **现象（报告者，`global` 区域 / macOS）**：两个国际版账号在 DSH 里显示积分耗尽，而同一账号在 WorkBuddy 客户端里完全正常；用同批 token 直接打 `/v2/chat/completions` 返回 **200**，证明账号并未耗尽。
+  - **根因**：上游对**同一个月度套餐**（`CapacityType === 4`）同时返回**两套容量字段**，它们回答的是两个不同的问题——`CapacityRemain`/`CapacitySize`/`CapacityUsed` 是**容量池**，`CycleCapacityRemain`/`CycleCapacitySize`/`CycleCapacityUsed` 是**本计费周期**。旧代码对月度套餐只读周期字段 `remain = monthly ? numberField('CycleCapacityRemain') : …`。
+  - **本机以真实账单接口复现（3 个国际版账号全部命中）**：`CapacityRemain=100` 而 `CycleCapacityRemain=0`、`CycleCapacityUsed=100`，且 `CycleEndTime="2026-10-31 23:59:59"`（**周期尚未结束**）、`Status=0`、`ExpiredTime=""`。即套餐有效、池里还有 100，插件却报 **0**。对照组：同机 CN 账号两字段一致（500/500），读数为 2267，**所以国内版看不出异常**——但 CN 也在受影响之列：本机 `老丁`/`LaoDing` 两个 CN 账号的月度套餐同样是池 500 而周期余额更小（实测同一时刻分别为 `CycleCapacityRemain=125` 与 `0`），修复后读数分别为 **1343→1718** 与 **768→1268**；`老丁` 的增量 +375 恰等于 `500 − 125`，正好说明这一个字段差异在两个区域都存在、且月度套餐的周期余额会随消耗变化。报告者「cn 是否受影响未能对照」一节由此有答案。
+  - **修法**：余额一律读容量池 `CapacityRemain`（两种套餐都是），`size` 同理统一读 `CapacitySize`（真实月度行上 `CapacitySize` 与 `CycleCapacitySize` 同时存在且相等，取前者；后者保留为回退）。**周期字段继续读取**并作为新的 `cycleRemain` 随包透出——它回答的是「本周期额度是否用完」这个**不同**的问题，而 `refreshAtMs`（周期续期点）的提示文案只有靠它才成立。**没有采用报告者建议的 `Math.max(两者)`**：那两个字段不是同一量的两种口径，取较大值会把「本周期已用完、等 10/31 续期」误报成「仍有余额」，正是 `quotaRefreshAtMs` 冷却提示要避免的误导。
+  - **修法未触动 gift 路径**（`CapacityType 1`）：仍读 `CapacityRemain`、仍按「耗尽或过期即丢弃」处理——本缺陷只存在于月度分支。
+  - **实测（真实接口，修复前后对照）**：3 个国际版账号 `0 → 100`（各自 `CapacityRemain=100`）；CN `17749714179` 保持 2267 不变（该账号两字段本来就一致）；CN `老丁` 1343→1718、`LaoDing` 768→1268。**CN 侧读数上升不是回归，是修正**：这两个账号的月度套餐池余额（500）一直高于本周期余额，旧代码只读了后者。
+  - **守卫 `tests/issue48-monthly-pool-credits.spec.ts`（8 例）**：直接驱动**真实的 `fetchCredits` 解析器**（stub 掉的只有 `fetch`），用**真实账单行的原始字段值**（池 100 / 周期 0 / 周期未结束）构造夹具。原有的全部套件都在边界上 mock 掉整个 `fetchCredits`，**这正是该缺陷能漏出去的原因**——字段解析这一层此前零覆盖。覆盖：读池而非周期（回归本体）、`cycleRemain` 单独透出且 `refreshAtMs` 仍在、多账号求和、两字段一致时不受影响（同时通过新旧代码，用来说明「CN 没有开始按另一种方式读」）、周期耗尽但池充足时账号不被丢弃、gift 路径不变（含耗尽/过期两条丢弃分支）、负值不进入 total、月度与 gift 混合不重复计数。**变异验证**：把 `remain` 改回 `numberField('CycleCapacityRemain')` → 3 例变红，报错正是 `expected +0 to be 100`（与现场症状同形）。
+  - **边界透传守卫**：`tests/web-status.spec.ts` 增补断言，钉住 `remain` 与 `cycleRemain` **各自独立**地跨 host→client 边界存活（`toMatchObject` 不会因字段丢失而变红），并钉住 gift **不带**该字段（缺失而非 0）。**变异验证**：删掉 `web-status.ts` 里的透传 → 立即变红。
+
 ## 4.3.2 (2026-10-12)
 
 ### Fixes
