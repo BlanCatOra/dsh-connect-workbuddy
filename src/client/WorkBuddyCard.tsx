@@ -1029,6 +1029,58 @@ export function WorkBuddyCard({ t, settingsScope, view }: WorkBuddyCardProps & {
     </>
   )
 
+  /**
+   * Sidebar credit line switch — ONE control, for the ACTIVE tab's region only.
+   *
+   * The two regions are independent providers with independent accounts, so
+   * each tab owns its own switch and they are never shown as a pair: this one
+   * writes `regions.<activeRegion>.showCreditsInMainUi`, which decides only
+   * whether THAT region's line appears in the sidebar. That matches how every
+   * other control in this card is scoped to the selected tab (account, pool,
+   * model list), and it means a CN-only user is never shown a switch for an
+   * account they do not have. An earlier revision rendered both boxes side by
+   * side under the tab bar regardless of the active tab; that read as one
+   * shared setting and was replaced.
+   *
+   * RENDERED BESIDE THE POOL HEADING, not on its own row. It used to occupy a
+   * full line of vertical space for a single checkbox; the pool heading already
+   * had a title-left / badge-right row, so the control fits there without the
+   * block growing. It is handed to `AccountPool` as a ready-made node purely so
+   * the two can share a flex row — the write path, the disabled rules and the
+   * serialization against the card's other region writers all stay here, where
+   * the settings scope and the save state live.
+   */
+  const creditsSwitch = (
+    <label
+      className="dsm-workbuddy-credits-switch"
+      title={activeRegion === 'cn' ? t('row.showCreditsCnHint') : t('row.showCreditsGlobalHint')}
+    >
+      <input
+        type="checkbox"
+        /* A region that is NOT switched on has no credits to show, so the
+           control renders OFF rather than reporting a stored flag the user
+           cannot act on: the value is forced to `false` instead of read, and
+           the box is disabled below.
+
+           This is not cosmetic. The line fetches that region's usage, and a
+           withdrawn provider makes every one of those requests fail — leaving
+           the sidebar with a permanently failing row beside a checkbox claiming
+           the line is on. Reading the stored flag would also lie in the other
+           direction: `showCreditsInMainUi` defaults to true, so a region the
+           user never configured would read as ON while its provider is off. */
+        checked={activeRegionOn ? creditsShownOn(activeRegion) : false}
+        /* Serialized against the SAVE writers for the same reason the provider
+           on/off box is: all of them write the SAME region slot, and a toggle
+           carrying a stale snapshot could roll back a concurrent save.
+           Disabled outright while the region is off — there is nothing to show
+           until it is switched on. */
+        disabled={!activeRegionOn || togglingCredits === activeRegion || !canWrite || saving || poolBusy}
+        onChange={(event) => { void toggleCredits(activeRegion, event.target.checked) }}
+      />
+      <span>{activeRegion === 'cn' ? t('row.showCreditsCn') : t('row.showCreditsGlobal')}</span>
+    </label>
+  )
+
   return (
     <li className={`dsm-plugin-card${open ? ' dsm-plugin-card-open' : ''}`}>
       <button
@@ -1090,51 +1142,6 @@ export function WorkBuddyCard({ t, settingsScope, view }: WorkBuddyCardProps & {
               {!activeRegionOn
                 ? <p className="dsm-workbuddy-tab-off-notice">{t('row.tabOffNotice')}</p>
                 : null}
-              {/* Sidebar credit line switch — ONE control, for the ACTIVE tab's
-                  region only.
-
-                  The two regions are independent providers with independent
-                  accounts, so each tab owns its own switch and they are never
-                  shown as a pair: this tab writes
-                  `regions.<activeRegion>.showCreditsInMainUi`, which decides
-                  only whether THAT region's line appears in the sidebar. That
-                  matches how every other control in this card is already scoped
-                  to the selected tab (account, pool, model list), and it means
-                  a CN-only user is never shown a switch for an account they do
-                  not have.
-
-                  An earlier revision rendered both boxes side by side under the
-                  tab bar regardless of the active tab; that read as one shared
-                  setting and was replaced. */}
-              <label
-                className="dsm-workbuddy-credits-switch"
-                title={activeRegion === 'cn' ? t('row.showCreditsCnHint') : t('row.showCreditsGlobalHint')}
-              >
-                <input
-                  type="checkbox"
-                  /* A region that is NOT switched on has no credits to show, so
-                     the control renders OFF rather than reporting a stored flag
-                     the user cannot act on: the value is forced to `false`
-                     instead of read, and the box is disabled below.
-
-                     This is not cosmetic. The line fetches that region's usage,
-                     and a withdrawn provider makes every one of those requests
-                     fail — leaving the sidebar with a permanently failing row
-                     beside a checkbox claiming the line is on. Reading the
-                     stored flag would also lie in the other direction:
-                     `showCreditsInMainUi` defaults to true, so a region the user
-                     never configured would read as ON while its provider is off. */
-                  checked={activeRegionOn ? creditsShownOn(activeRegion) : false}
-                  /* Serialized against the SAVE writers for the same reason the
-                     provider on/off box is: all of them write the SAME region
-                     slot, and a toggle carrying a stale snapshot could roll back
-                     a concurrent save. Disabled outright while the region is
-                     off — there is nothing to show until it is switched on. */
-                  disabled={!activeRegionOn || togglingCredits === activeRegion || !canWrite || saving || poolBusy}
-                  onChange={(event) => { void toggleCredits(activeRegion, event.target.checked) }}
-                />
-                <span>{activeRegion === 'cn' ? t('row.showCreditsCn') : t('row.showCreditsGlobal')}</span>
-              </label>
               {/* The signed-in status card is GONE: the account name and the
                   token expiry were both information the rest of the card already
                   carries, and this line was actively the wrong place for it.
@@ -1233,6 +1240,23 @@ export function WorkBuddyCard({ t, settingsScope, view }: WorkBuddyCardProps & {
                       onSelectAccount={(accountId) => { void switchAccount(accountId) }}
                       selectingAccount={switchingAccount}
                       accountTools={accountTools}
+                      // The sidebar-credit switch rides in the pool's heading row
+                      // so it costs no vertical space; see `creditsSwitch`.
+                      //
+                      // Only passed when this section will actually RENDER one:
+                      // `AccountPool` returns null without Host pool state, and a
+                      // switch handed to it would vanish with it — silently
+                      // removing a settings control on every Host that reports no
+                      // pool. The `status.pool === undefined` branch below renders
+                      // the same node on its own line instead, so exactly one of
+                      // the two sites is live.
+                      //
+                      // Deliberately NOT gated on `activeRegionOn`: a region that
+                      // is switched off must still SHOW the switch, rendered
+                      // disabled, or the user cannot see why the line is missing
+                      // (and the card's own off-notice points at the provider box
+                      // rather than at a control that vanished).
+                      {...status.pool === undefined ? {} : { headerExtra: creditsSwitch }}
                       siblingBusy={saving || togglingRegion !== undefined}
                       onBusyChange={setPoolBusy}
                       // Returns the promise so the pool section can AWAIT the
@@ -1252,6 +1276,19 @@ export function WorkBuddyCard({ t, settingsScope, view }: WorkBuddyCardProps & {
                       // (see the `onRefresh` prop note in AccountPool).
                       onRefresh={() => refreshUsage(activeRegion)}
                     />
+                    {/* The switch's OTHER site, and the reason it is not simply
+                        always inside the pool: `AccountPool` renders nothing
+                        without Host pool state (an older Host, or any profile
+                        whose route omits it), and a control handed to a section
+                        that returns null disappears with it. Exactly one of the
+                        two sites is live, so the switch is always reachable.
+
+                        A standalone row rather than the heading row here,
+                        because there is no heading to share: this branch has no
+                        "account pool" title at all. */}
+                    {status.pool === undefined
+                      ? <div className="dsm-workbuddy-credits-switch-row">{creditsSwitch}</div>
+                      : null}
 
                     <section className="dsm-workbuddy-models" aria-label={t('row.modelsTitle')}>
                       {/* The model list no longer folds. It used to be a native

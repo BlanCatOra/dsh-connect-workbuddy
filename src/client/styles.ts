@@ -48,10 +48,17 @@ export const WORKBUDDY_CARD_CSS = `
 .dsm-workbuddy-tab-switch{display:inline-flex;align-items:center;flex:none;padding:0 8px 0 2px;cursor:pointer}
 .dsm-workbuddy-tab-switch input{margin:0;cursor:pointer;accent-color:var(--dsw-alias-brand-primary,#5686fe)}
 .dsm-workbuddy-tab-switch input:disabled{opacity:.4;cursor:default}
-/* One sidebar-credit switch, belonging to the ACTIVE tab's region. It sits on
-   its own line so it reads as a property of this tab rather than as a shared
-   pair of settings — the tab bar already says which region is in scope. */
-.dsm-workbuddy-credits-switch{display:flex;align-items:center;gap:6px;margin:8px 0 2px;cursor:pointer;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#c6c9d0)}
+/* One sidebar-credit switch, belonging to the ACTIVE tab's region. It rides in
+   the account-pool heading row (dsm-workbuddy-pool-head-extra) so one
+   checkbox no longer costs a full line of vertical space; the tab bar already
+   says which region is in scope, so it still reads as this tab's property
+   rather than as a shared pair of settings. No vertical margin: the heading row
+   owns the spacing. */
+.dsm-workbuddy-credits-switch{display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,#c6c9d0)}
+/* The standalone fallback site: used only when the account-pool section did not
+   render (no Host pool state), so there is no heading row to share. This is the
+   spacing the control carried before it moved beside that heading. */
+.dsm-workbuddy-credits-switch-row{display:flex;align-items:center;margin:8px 0 2px}
 .dsm-workbuddy-credits-switch input{margin:0;cursor:pointer;accent-color:var(--dsw-alias-brand-primary,#5686fe)}
 .dsm-workbuddy-credits-switch input:disabled{opacity:.4;cursor:default}
 .dsm-workbuddy-tab-off{opacity:.55}
@@ -137,8 +144,15 @@ export const WORKBUDDY_CARD_CSS = `
 
 /* ---- Account pool ---- */
 .dsm-workbuddy-pool{display:flex;flex-direction:column;gap:12px;margin:0;padding:16px 0 4px;border-top:1px solid var(--dsw-alias-border-l2,#36373b)}
-.dsm-workbuddy-pool-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
-.dsm-workbuddy-pool-current-badge{padding:2px 10px;border-radius:999px;background:rgba(86,134,254,.16);color:var(--dsw-alias-brand-primary,#5686fe);font-size:12px;font-weight:600;line-height:18px;white-space:nowrap}
+/* Title, then the inline extra (the sidebar-credit switch), then the
+   serving-account badge on the far edge. The badge is pushed right with
+   margin-left:auto rather than the row using space-between: with three
+   children the latter would strand the switch in the middle instead of binding
+   it to the title, and with only two (no switch) margin-left:auto keeps the
+   badge on the right edge exactly as before. */
+.dsm-workbuddy-pool-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.dsm-workbuddy-pool-head-extra{display:inline-flex;align-items:center}
+.dsm-workbuddy-pool-current-badge{margin-left:auto;padding:2px 10px;border-radius:999px;background:rgba(86,134,254,.16);color:var(--dsw-alias-brand-primary,#5686fe);font-size:12px;font-weight:600;line-height:18px;white-space:nowrap}
 /* Sits under the header block, before the batch buttons: account discovery is
    the first step of using the pool, so it reads above the actions it enables. */
 /* Manual-mode account picker: shares the settings row layout (.pool-set), and

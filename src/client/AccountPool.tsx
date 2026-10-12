@@ -178,6 +178,25 @@ export interface AccountPoolProps {
    * in its signed-out branch, where this section does not exist at all.
    */
   accountTools?: ReactNode
+  /**
+   * The sidebar-credit switch, rendered INLINE BESIDE the pool heading.
+   *
+   * It moved here from its own row under the tab bar, where it cost a full line
+   * of vertical space for one checkbox. The heading row already had the shape
+   * for it (title left, serving-account badge right) so the control fits
+   * without the block growing at all.
+   *
+   * Deliberately a SLOT rather than state or a callback pair: the switch writes
+   * `regions.<region>.showCreditsInMainUi` through the card's own settings
+   * scope and serializes against the card's SAVE writers (all of them write the
+   * same region slot, so a toggle carrying a stale snapshot could roll back a
+   * concurrent save). None of that belongs to the pool, and re-implementing it
+   * here would duplicate both the write and the serialization.
+   *
+   * `undefined` is the older-Host / signed-out case: the card simply does not
+   * pass it, and the heading renders as it did before.
+   */
+  headerExtra?: ReactNode
 }
 
 /** How many activity lines are kept; the oldest are dropped. */
@@ -281,7 +300,7 @@ function stateColor(account: WorkBuddyWebPoolAccount): string {
  * section implying the feature exists.
  */
 export function AccountPool(props: AccountPoolProps): ReturnType<typeof h> | null {
-  const { t, region, pool, settingsScope, siblingBusy, onBusyChange, onSaved, onRefresh, onRescan, rescanning, onSelectAccount, selectingAccount, accountTools } = props
+  const { t, region, pool, settingsScope, siblingBusy, onBusyChange, onSaved, onRefresh, onRescan, rescanning, onSelectAccount, selectingAccount, accountTools, headerExtra } = props
   const [draft, setDraft] = useState<PoolPreferences | null>(null)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | undefined>(undefined)
@@ -899,6 +918,11 @@ export function AccountPool(props: AccountPoolProps): ReturnType<typeof h> | nul
     // before anything can be acted on.
     h('div', { className: 'dsm-workbuddy-pool-head' },
       h('h3', { className: 'dsm-workbuddy-pool-title' }, t('row.poolTitle')),
+      // The sidebar-credit switch, tucked in beside the heading (see the
+      // `headerExtra` prop note). It sits in the SAME flex row as the title
+      // rather than on the right edge, so it does not push the serving-account
+      // badge around as the label's length changes with the region.
+      headerExtra === undefined ? null : h('span', { className: 'dsm-workbuddy-pool-head-extra' }, headerExtra),
       // Which account is serving, stated in the header rather than left to a row
       // tint the user has to go looking for. The pool's whole job is deciding who
       // gets billed, so "who is it right now" belongs where the eye lands first.

@@ -246,3 +246,63 @@ describe('card sidebar-credit switch follows the active tab', () => {
     expect(posted.value.cn?.showCreditsInMainUi).toBe(false)
   })
 })
+
+describe('the switch shares the account-pool heading row', () => {
+  /** A usage body that ALSO carries Host pool state, so the pool section renders. */
+  function usageWithPool(region: string): Record<string, unknown> {
+    return {
+      ...usageOf(region),
+      pool: {
+        enabled: true,
+        checkinSupported: true,
+        targetModelSource: 'free',
+        targetModelId: 'free-1',
+        memberAccountIds: [],
+        effectiveMemberAccountIds: [],
+        catalog: [{ id: 'free-1', name: 'Free One', creditMultiplier: 0 }],
+        accounts: [],
+      },
+    }
+  }
+
+  const renderPool = async (body: Record<string, unknown>, scopeValue: Record<string, unknown>) => {
+    stubFetch((url) => ({ body: url.includes('__save') ? { value: {} } : body }))
+    const m = await mount(WorkBuddyCard, { t, settingsScope: fakeScope(scopeValue), view: 'page' })
+    await m.settle()
+    return m
+  }
+
+  it('renders the switch INSIDE the pool heading, and not on a separate row', async () => {
+    // The whole point of the move: one checkbox no longer costs a full line.
+    // Asserted by ANCESTRY rather than by counting boxes, because a switch that
+    // rendered in BOTH places would pass a mere presence check while
+    // reintroducing the wasted line.
+    const m = await renderPool(usageWithPool('cn'), { regions: { cn: {} } })
+    const head = m.container.querySelector('.dsm-workbuddy-pool-head')
+    expect(head).not.toBeNull()
+    expect(head?.querySelector('.dsm-workbuddy-credits-switch')).not.toBeNull()
+    // The standalone fallback row must NOT also be present.
+    expect(m.container.querySelector('.dsm-workbuddy-credits-switch-row')).toBeNull()
+    // Still exactly one switch overall.
+    expect(creditSwitches(m.container)).toHaveLength(1)
+  })
+
+  it('falls back to its own row when the pool section does not render', async () => {
+    // `AccountPool` returns null without Host pool state. The switch must survive
+    // that: handing it to a section that renders nothing would silently remove a
+    // settings control from every Host that reports no pool.
+    const { m } = await render(usageOf('cn'), { regions: { cn: {} } })
+    expect(m.container.querySelector('.dsm-workbuddy-pool-head')).toBeNull()
+    expect(m.container.querySelector('.dsm-workbuddy-credits-switch-row')).not.toBeNull()
+    expect(creditSwitches(m.container)).toHaveLength(1)
+  })
+
+  it('keeps the region-specific label now that the tab bar is not adjacent', async () => {
+    // Before the move the label sat right under the tab bar; now it shares a row
+    // with "account pool", so it has to name its own scope. Two identical labels
+    // would make the CN and international switches indistinguishable in a card
+    // where both exist.
+    const cn = await renderPool(usageWithPool('cn'), { regions: { cn: {} } })
+    expect(creditSwitches(cn.container)[0]?.label).toBe('row.showCreditsCn')
+  })
+})
