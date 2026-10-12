@@ -1,5 +1,19 @@
 # Changelog
 
+## 4.3.4 (2026-10-12)
+
+### Fixes
+
+- **移除一条只会在 Windows 上失败的测试断言，CI 恢复全绿。**（PR #49）
+  - **现象**：4.3.2 与 4.3.3 的 CI 在 `windows-latest` 上红、`ubuntu-latest` 全绿，失败点只有一处：
+    ```
+    AssertionError: expected 'D:\explicit\home' to be '/explicit/home'
+    ```
+  - **根因**：`tests/host-peers.spec.ts` 把 `resolveDshHome('/explicit/home')` 与**字面量** `/explicit/home` 比较。而 `resolveDshHome` 会对入参跑 `path.resolve`，win32 下 `/explicit/home` 被规范成 `\explicit\home`——这条断言把「哪个平台在跑测试」写进了期望值，正是 `docs/WINDOWS.md` §4 那条「断言行为，不要断言跑测试的机器」要拦的形态。
+  - **修法**：改为与 `path.resolve` **自身**比较（两侧同一个解析器），因此在任何平台都成立；并补一条不含分隔符的用例，证明胜出的是「显式入参」而不是某个字符串的写法。守卫本身（解析优先级、后备实现行为）一条未减。
+  - **验证**：先在本地按 win32 路径语义逐形态核对（`/explicit/home`、`relative-ish`、`C:\…`、`~/dsh` 两侧全部一致），再经 **CI 的 `windows-latest` 真机跑通**——本次缺陷恰恰属于「本机（macOS）永远绿」的那一类，所以最终判据只能是在 Windows 上跑出来的结果。
+  - **注意**：本次只改了 `tests/`，**`lib/` 与 `package.json` 的发布产物逐字未变**（`tests/` 不在 `files` 白名单内，从不随包分发）。因此 4.3.2 / 4.3.3 对用户而言没有问题，本版存在只为让 tag 上的 CI 结论与事实一致。
+
 ## 4.3.3 (2026-10-12)
 
 ### Fixes
