@@ -28,9 +28,10 @@
  * pi-ai into the standalone `doctor` CLI, which must also run from market
  * installs where NO local pi-ai exists and the module is only provided inside
  * the DSH host — a static import there is a load-time crash. Resolution
- * itself does not need the module: within the peer range, the manifest
- * version and the `normalizeContext` feature (present from 0.87 on, not
- * before) agree.
+ * itself does not need the module: the manifest version and the
+ * `normalizeContext` feature (present from 0.87 on, not before) agree across
+ * `0.87+` AND `1.x` — 1.x is 0.87's successor and keeps the same normalized
+ * transcript, so the split is `>= 0.87` rather than "within 0.x".
  *
  * When resolution FAILS — the normal state of a market install probed outside
  * the host — there is no local copy, so inside DSH the host supplies pi-ai.
@@ -138,13 +139,36 @@ function readVersion(moduleFile: string | undefined): string | undefined {
 }
 
 /**
- * The generation a manifest version belongs to. Within the peer range
- * (<0.88.0) the split is exactly `0.87+` versus earlier; an unreadable
- * version conservatively reports `legacy` (and doctor shows it as
- * unreadable, so the guess is visible rather than silent).
+ * The generation a manifest version belongs to.
+ *
+ * `0.87+` consumes normalized transcripts natively; earlier releases want the
+ * 0.85 shape, so within the declared peer range the split is exactly `0.87+`
+ * versus earlier. An unreadable version conservatively reports `legacy` (and
+ * doctor shows it as unreadable, so the guess is visible rather than silent).
+ *
+ * The 1.x line MUST land on `modern`, and it is not a hypothetical: DSH
+ * 0.2.1-alpha.2 ships `@earendil-works/pi-ai@1.0.2`, while npm currently
+ * publishes 1.1.0. Both 0.87.1 and 1.0.2/1.1.0 read tools from the same place
+ * (`context.messages` → the leading system message's `toolsAdded`; see
+ * pi-ai's `resolveTranscriptTools`). Matching only `0.<minor>.` classified
+ * 1.0.2 as `legacy`, so `withLegacyContext` folded the transcript into the
+ * 0.85 shape — which moves the tool declarations to a top-level `tools` field
+ * pi-ai 1.x never reads. Every request then went upstream with NO tools
+ * declared: no model could emit a `toolCall`, and the domestic gateway, which
+ * tolerates a prompt-less body, had the model write DSML markup into the answer
+ * text instead. The host's compatibility gate does not catch this: it only
+ * evaluates peers in the `@deepseek-ai/dsh*` namespace, so an out-of-range
+ * `@earendil-works/pi-ai` peer is never enforced.
+ *
+ * Deliberately match major 1 only. This establishes compatibility for the
+ * observed 1.x line (including current 1.1.0) without assuming an uninspected
+ * future major such as 2.x keeps the same transcript contract. The declared
+ * peer range remains the plugin's supported-version boundary.
  */
 function generationOf(version: string | undefined): PiAiGeneration {
   if (version === undefined) return 'legacy'
+  const major = /^(\d+)\./u.exec(version)
+  if (major !== null && Number(major[1]) === 1) return 'modern'
   const match = /^0\.(\d+)\./u.exec(version)
   if (match === null) return 'legacy'
   return Number(match[1]) >= 87 ? 'modern' : 'legacy'
