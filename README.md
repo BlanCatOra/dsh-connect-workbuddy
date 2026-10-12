@@ -215,6 +215,49 @@ dsh plugin --profile dsh-tui add dsh-connect-workbuddy # TUI
 2. **凭据路径已部分经真机验证**。候选列表按平台约定推导并有单元测试钉住（含 `LOCALAPPDATA` / `APPDATA` 缺省与空白串两种回落）。已在真实 Windows 11 上确认：`%LOCALAPPDATA%\CodeBuddyExtension\Data\Public\auth` 与 `%LOCALAPPDATA%\Programs\WorkBuddy\WorkBuddy.exe` **命中**，加密凭据的 `keyId` 与登记向量逐字一致。**其余候选仍未经真机逐项验证**——若你的凭据或 App 不在默认位置，用 `WORKBUDDY_AUTH_FILE` / `WORKBUDDY_APP_EXECUTABLE` 指定，并欢迎回报现场。
 3. **加密凭据（5.6.0 起）需要桌面 App 在场**，Windows 与 macOS 同样如此；App 装在自定义目录（如 `E:\WorkBuddy\WorkBuddy.exe`）时用 `WORKBUDDY_APP_EXECUTABLE` 指定。
 
+### 在服务器上使用：搬运已登录的凭据
+
+在无桌面环境的服务器（或任何不想安装 WorkBuddy 桌面 App 的机器）上，插件读不到本机凭据。办法是**从一台已经登录过 WorkBuddy 的机器上，把凭据目录整体拷过来**——插件只读这份文件，不要求 App 在场（**前提是凭据本身未加密**，见下）：
+
+```sh
+# 1) 在「已登录 WorkBuddy 的机器」上，找到并打包凭据目录
+#    macOS：  ~/Library/Application Support/CodeBuddyExtension
+#    Linux：  ${XDG_CONFIG_HOME:-~/.config}/CodeBuddyExtension
+#    Windows：%LOCALAPPDATA%\CodeBuddyExtension  以及  %APPDATA%\CodeBuddyExtension
+tar czf codebuddy-cred.tgz -C <上面的父目录> CodeBuddyExtension
+
+# 2) 把 codebuddy-cred.tgz 传到服务器，解到「插件会读的那个目录」
+#    Linux：
+mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}"
+tar xzf codebuddy-cred.tgz -C "${XDG_CONFIG_HOME:-$HOME/.config}"
+
+# 3) 确认插件读到了
+dsh plugin --profile web exec dsh-connect-workbuddy status
+```
+
+> ⚠️ **Linux 上没有 `~/.local/share` 这条路。** 插件的候选目录由 `src/auth.ts` 的 `defaultDesktopAuthDirs()` 决定，**Linux 只读 `$XDG_CONFIG_HOME`（缺省 `~/.config`）**：
+>
+> | 平台 | 插件实际读取的凭据目录 |
+> | --- | --- |
+> | macOS | `~/Library/Application Support/CodeBuddyExtension/Data/Public/auth` |
+> | Linux | `${XDG_CONFIG_HOME:-~/.config}/CodeBuddyExtension/Data/Public/auth` |
+> | Windows | `%LOCALAPPDATA%` 与 `%APPDATA%` 下的 `CodeBuddyExtension\Data\Public\auth` |
+>
+> 所以**只把凭据解到 `~/.local/share` 是不会被读到的**——要么解到上面列出的目录，要么用 `WORKBUDDY_AUTH_FILE` 直接指向那份 auth 文件（显式指定时该目录下的同级备份文件仍会一并扫描，账号切换照常可用）。
+
+> 🔐 **加密凭据（WorkBuddy 5.6.0 起）不能靠搬运解决。** 新版桌面端把 auth 文件里的 token 字段加密了，密钥由 App 的原生绑定在**运行时现取**、不落盘。因此一台没有 App 的服务器上，即使把加密后的 auth 文件拷过去也**读不出来**（插件会如实报告未登录，而不会退化成读出一个残缺 token）。可行的做法是**从一台仍在运行 5.6.0 之前版本、或凭据未加密的机器上搬运**，或者在该服务器上安装 App 以取得密钥。
+>
+> 判断当前处于哪种情况，看 `doctor` 的两行输出即可：
+>
+> ```
+> Desktop auth file: present (…/CodeBuddyExtension/Data/Public/auth/.workbuddy-auth.json)
+> Encrypted-credential support: unavailable (…)
+> ```
+>
+> `Desktop auth file: present` 说明文件找到了；此时若 `status` 仍报未登录、而 `Encrypted-credential support` 为 `unavailable`（服务器上没有 App），那就是加密凭据 + 缺密钥的场景——搬运救不了它。
+
+> 🔒 **凭据等同于账号**：这份文件里是可直接使用的登录态。传输时请走加密通道（`scp` / 私网），落到服务器后用 `chmod 600` 收紧权限，别放进任何会被打包或提交的目录。
+
 ## 命令行
 
 ```sh

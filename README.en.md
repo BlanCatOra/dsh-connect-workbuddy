@@ -205,6 +205,49 @@ All three platforms are supported targets; the differences below are **implement
 2. **Credential paths are partly verified on real Windows hardware.** The candidate list is derived from platform conventions and pinned by unit tests (including both the unset and the blank-string fallback for `LOCALAPPDATA` / `APPDATA`). On a real Windows 11 machine, `%LOCALAPPDATA%\CodeBuddyExtension\Data\Public\auth` and `%LOCALAPPDATA%\Programs\WorkBuddy\WorkBuddy.exe` **did resolve**, and the encrypted credential's `keyId` matched the registered vector verbatim. **The remaining candidates are still not verified per-item** — if your credential or app lives elsewhere, point `WORKBUDDY_AUTH_FILE` / `WORKBUDDY_APP_EXECUTABLE` at it and please report what you see.
 3. **Encrypted credentials (from 5.6.0) require the desktop app to be present**, on Windows exactly as on macOS; if the app lives in a custom directory (e.g. `E:\WorkBuddy\WorkBuddy.exe`), point `WORKBUDDY_APP_EXECUTABLE` at it.
 
+### Using it on a server: carry the credential over
+
+On a headless server (or any machine where you would rather not install the WorkBuddy desktop app), the plugin has no local credential to read. The way around it is to **copy the credential directory over from a machine that has already signed in to WorkBuddy** — the plugin only reads that file and does not require the app to be present (**provided the credential itself is not encrypted**, see below):
+
+```sh
+# 1) On the machine that is already signed in to WorkBuddy, locate and pack the credential dir
+#    macOS:   ~/Library/Application Support/CodeBuddyExtension
+#    Linux:   ${XDG_CONFIG_HOME:-~/.config}/CodeBuddyExtension
+#    Windows: %LOCALAPPDATA%\CodeBuddyExtension  and  %APPDATA%\CodeBuddyExtension
+tar czf codebuddy-cred.tgz -C <the parent directory above> CodeBuddyExtension
+
+# 2) Move codebuddy-cred.tgz to the server and unpack it into the directory the plugin reads
+#    Linux:
+mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}"
+tar xzf codebuddy-cred.tgz -C "${XDG_CONFIG_HOME:-$HOME/.config}"
+
+# 3) Confirm the plugin sees it
+dsh plugin --profile web exec dsh-connect-workbuddy status
+```
+
+> ⚠️ **On Linux there is no `~/.local/share` path.** The candidate directories come from `defaultDesktopAuthDirs()` in `src/auth.ts`, and **Linux reads only `$XDG_CONFIG_HOME` (defaulting to `~/.config`)**:
+>
+> | Platform | The credential directory the plugin actually reads |
+> | --- | --- |
+> | macOS | `~/Library/Application Support/CodeBuddyExtension/Data/Public/auth` |
+> | Linux | `${XDG_CONFIG_HOME:-~/.config}/CodeBuddyExtension/Data/Public/auth` |
+> | Windows | `CodeBuddyExtension\Data\Public\auth` under `%LOCALAPPDATA%` and `%APPDATA%` |
+>
+> So **unpacking into `~/.local/share` alone will not be seen** — either unpack into the directories listed above, or point `WORKBUDDY_AUTH_FILE` straight at the auth file (when set explicitly, sibling backup files in that directory are still scanned, so account switching keeps working).
+
+> 🔐 **Encrypted credentials (WorkBuddy 5.6.0 and later) cannot be carried over this way.** Recent desktop builds encrypt the token fields inside the auth file, and the key is fetched at runtime from the app's native binding and never written to disk. On a server without the app, copying the encrypted auth file over **will not be readable** (the plugin reports not-signed-in honestly rather than degrading into reading a truncated token). What works: carry the credential from a machine still running a pre-5.6.0 version or an unencrypted credential, or install the app on that server to obtain the key.
+>
+> Two `doctor` lines tell you which case you are in:
+>
+> ```
+> Desktop auth file: present (…/CodeBuddyExtension/Data/Public/auth/.workbuddy-auth.json)
+> Encrypted-credential support: unavailable (…)
+> ```
+>
+> `Desktop auth file: present` means the file was found; if `status` still reports not-signed-in while `Encrypted-credential support` is `unavailable` (no app on the server), that is the encrypted-credential-without-key case — carrying the file over cannot fix it.
+
+> 🔒 **The credential is the account**: that file is a directly usable session. Transfer it over an encrypted channel (`scp` / private network), tighten it with `chmod 600` once on the server, and keep it out of anything that gets packaged or committed.
+
 ## Command line
 
 ```sh

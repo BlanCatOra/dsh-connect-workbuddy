@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Docs
+
+- **README 增补「在服务器上使用：搬运已登录的凭据」一节**（承接 issue #47 报告者 tuoyuangui 在 #47 评论中贡献的做法）。
+  - **内容**：给出从「已登录 WorkBuddy 的机器」打包 `CodeBuddyExtension` 目录 → 传到服务器 → 解到插件实际读取的目录 → 用 `status` 验证的完整三步命令；中英双语同步（`README.md` / `README.en.md`）。
+  - **更正了报告者原话里的一处平台细节**：报告者写的是 `cp -r 其他位置的 ~/.local/share[~/.config]/CodeBuddyExtension …`，其中 `~/.local/share` 在 **Linux 上插件不会读取**。`src/auth.ts` 的 `defaultDesktopAuthDirs()` 在 Linux 只返回 `${XDG_CONFIG_HOME:-~/.config}/CodeBuddyExtension/Data/Public/auth` 一项。README 因此列出三平台**实际**读取路径的对照表，并明确「只解到 `~/.local/share` 不会被读到」，同时给出 `WORKBUDDY_AUTH_FILE` 这条兜底（显式指定时同级备份仍会被扫描，账号切换照常可用）。
+  - **补了两条报告者未提及、但读者必须知道的边界**：其一，**5.6.0 起的加密凭据无法靠搬运解决**——密钥在运行时由 App 原生绑定现取、不落盘，所以没有 App 的服务器上即使拿到加密后的 auth 文件也读不出来（插件会如实报未登录，不会退化成读出一个残缺 token，该行为见 `src/at-rest.ts` 与[已知限制](README.md#已知限制)）；其二，凭据文件本身**等同于账号**，必须走加密通道传输并 `chmod 600`。
+  - **本版只改文档**，未触动 `src/`、`tests/` 与构建产物。措辞中的每条行为断言（候选路径、加密凭据的失败形态、`doctor` 的输出文本）均对照 `src/auth.ts`、`src/at-rest.ts`、`src/bin.ts` 逐条核过，不是照抄 issue 评论。
+
 ## 4.3.4 (2026-10-12)
 
 ### Fixes
